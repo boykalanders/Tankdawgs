@@ -192,8 +192,6 @@ export default function GameShell({
           </div>
 
           <Divider />
-          <WindGauge wind={state.wind} />
-          <Divider />
 
           <div className="relative shrink-0">
             <IconButton icon={<IconChat />} active={chatOpen} onClick={() => setChatOpen((v) => !v)} disabled={!chat} title="Comms" />
@@ -386,31 +384,6 @@ function Slider({
         className="w-full accent-gold disabled:opacity-50"
       />
     </label>
-  );
-}
-
-function WindGauge({ wind }: { wind: number }) {
-  const pct = Math.round(Math.abs(wind) * 100);
-  const calm = wind === 0;
-  const strong = pct >= 60;
-  return (
-    <div className="flex shrink-0 flex-col items-center rounded-lg border border-gold-dim/40 bg-black/50 px-3 py-1 leading-none">
-      <span className="text-[9px] uppercase tracking-[0.18em] text-cream/55">Wind</span>
-      <span
-        className={`flex items-center gap-1 font-mono text-2xl font-extrabold tabular-nums ${
-          calm ? "text-cream/50" : strong ? "text-burn" : "text-gold-bright"
-        }`}
-      >
-        {calm ? (
-          "—"
-        ) : (
-          <>
-            <span className="text-3xl">{wind > 0 ? "▶" : "◀"}</span>
-            {pct}
-          </>
-        )}
-      </span>
-    </div>
   );
 }
 
