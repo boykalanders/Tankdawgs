@@ -167,7 +167,7 @@ function GameRoom() {
       if (b.gameId !== gameId) return;
       pendingEnd.current = b.endState;
       setSnapshot((s) => (s ? { ...s, clockExpiresAt: b.clockExpiresAt } : s));
-      setAnim({ trajectories: b.trajectories, impacts: b.impacts });
+      setAnim({ shells: b.shells });
     };
     const onOver = (p: {
       gameId: string;

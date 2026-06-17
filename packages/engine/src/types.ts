@@ -65,15 +65,44 @@ export interface DamageEvent {
   killed: boolean;
 }
 
+/**
+ * One flying projectile produced by a shot — most weapons fire a single shell,
+ * but cluster/MIRV/tri produce several. Each carries its own polyline, the step
+ * at which it should START animating (so children appear after the parent lands),
+ * and the weapon id so the renderer can style the shell + explosion.
+ */
+export interface Shell {
+  path: Point[];
+  /** Impact point (null if it flew off the sides). */
+  impact: Point | null;
+  /** Global animation delay, in path-steps, before this shell starts moving. */
+  startStep: number;
+  /** Weapon id for per-weapon shell/trail/explosion styling. */
+  weaponId: string;
+}
+
 /** Full deterministic resolution of a shot. */
 export interface ShotResult {
-  /** One polyline per pellet (most weapons fire a single pellet). */
-  trajectories: Point[][];
-  /** Impact points (off-board fizzles excluded). */
-  impacts: Point[];
+  /** Every projectile, with staged start steps for the animation. */
+  shells: Shell[];
   damage: DamageEvent[];
   endState: GameState;
   outcome: { gameOver: boolean; winner: number | null };
+}
+
+/** How a weapon behaves on top of the base ballistics. */
+export type WeaponKind = "single" | "fan" | "cluster" | "mirv" | "roller" | "napalm";
+
+/** Visual styling for a weapon's shell + explosion (renderer only). */
+export interface WeaponStyle {
+  /** Shell body colour. */
+  shell: string;
+  /** Trail colour. */
+  trail: string;
+  /** Explosion core colour. */
+  burst: string;
+  /** Shell radius in world units. */
+  shellRadius: number;
 }
 
 /** A weapon definition. The registry is intentionally small but extensible — the
@@ -83,14 +112,16 @@ export interface Weapon {
   name: string;
   /** One-line description for the weapon picker. */
   blurb: string;
+  kind: WeaponKind;
   /** Crater / blast radius in world units. */
   blastRadius: number;
   /** Max damage at the epicentre (falls off linearly to 0 at blastRadius). */
   maxDamage: number;
-  /** Number of pellets fired in a small spread (1 for most weapons). */
-  pellets: number;
-  /** Total angular spread (degrees) across the pellets when pellets > 1. */
-  spreadDeg: number;
   /** How much terrain the blast removes, as a multiple of blastRadius. */
   digFactor: number;
+  /** Sub-projectile count (fan pellets, cluster bomblets, MIRV warheads). */
+  count: number;
+  /** Angular spread (degrees) for a fan. */
+  spreadDeg: number;
+  style: WeaponStyle;
 }

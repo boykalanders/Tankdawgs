@@ -1,4 +1,4 @@
-import type { DamageEvent, GameState, Point, ShotInput } from "@tankdawgs/engine";
+import type { DamageEvent, GameState, Shell, ShotInput } from "@tankdawgs/engine";
 
 export type Address = `0x${string}`;
 
@@ -59,9 +59,8 @@ export interface ShotBroadcast {
   shot: ShotInput;
   /** Hash of the state the shot was simulated FROM (clients verify sync). */
   preStateHash: string;
-  /** Pellet polylines + impact points + per-seat damage, for the animation. */
-  trajectories: Point[][];
-  impacts: Point[];
+  /** Every projectile (staged) + per-seat damage, for the animation. */
+  shells: Shell[];
   damage: DamageEvent[];
   /** Authoritative post-shot state — clients adopt it after animating. */
   endState: GameState;

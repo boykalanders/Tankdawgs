@@ -46,15 +46,19 @@ describe("artillery engine — validation", () => {
   });
 });
 
+/** First shell impact in a result (deterministic). */
+const firstImpact = (res: ReturnType<typeof simulateShot>) =>
+  res.shells.find((s) => s.impact)?.impact ?? null;
+
 describe("artillery engine — firing", () => {
-  it("produces a trajectory and advances the turn to the next alive seat", () => {
+  it("produces a shell trajectory and advances the turn to the next alive seat", () => {
     const s = init(3);
     const shot: ShotInput = { angle: 60, power: 40, weaponId: "shell" };
     const res = simulateShot(s, shot);
-    expect(res.trajectories[0].length).toBeGreaterThan(2);
+    expect(res.shells[0].path.length).toBeGreaterThan(2);
+    expect(res.shells[0].weaponId).toBe("shell");
     expect(res.endState.moveCount).toBe(1);
     if (!res.endState.gameOver) expect(res.endState.turn).toBe(1);
-    // Wind changed for the next turn.
     expect(res.endState.tanks[0].angle).toBe(60);
     expect(res.endState.tanks[0].power).toBe(40);
   });
@@ -62,10 +66,9 @@ describe("artillery engine — firing", () => {
   it("damages a tank caught in the blast", () => {
     const s = init(2);
     const shot: ShotInput = { angle: 90, power: 30, weaponId: "bigshot" };
-    // Probe where a straight-up shot lands (deterministic), then sit seat 1 there.
-    const impact = simulateShot(structuredClone(s), shot).impacts[0];
+    const impact = firstImpact(simulateShot(structuredClone(s), shot));
     expect(impact).toBeTruthy();
-    s.tanks[1].x = Math.round(impact.x);
+    s.tanks[1].x = Math.round(impact!.x);
 
     const res = simulateShot(s, shot);
     const dmg = res.damage.find((d) => d.seat === 1);
@@ -76,9 +79,9 @@ describe("artillery engine — firing", () => {
   it("ends the game when only one tank remains", () => {
     const s = init(2);
     const shot: ShotInput = { angle: 90, power: 30, weaponId: "bigshot" };
-    const impact = simulateShot(structuredClone(s), shot).impacts[0];
-    s.tanks[1].x = Math.round(impact.x);
-    s.tanks[1].health = 5; // one blast finishes it
+    const impact = firstImpact(simulateShot(structuredClone(s), shot));
+    s.tanks[1].x = Math.round(impact!.x);
+    s.tanks[1].health = 5;
 
     const res = simulateShot(s, shot);
     expect(res.outcome.gameOver).toBe(true);
@@ -86,17 +89,41 @@ describe("artillery engine — firing", () => {
     expect(res.endState.gameOver).toBe(true);
   });
 
-  it("tri-shot fires three pellets", () => {
+  it("tri-shot fires three shells", () => {
     const s = init(2);
     const res = simulateShot(s, { angle: 70, power: 50, weaponId: "tri" });
-    expect(res.trajectories).toHaveLength(3);
+    expect(res.shells).toHaveLength(3);
+    expect(res.shells.every((sh) => sh.startStep === 0)).toBe(true);
+  });
+
+  it("cluster splits into bomblets that start after the parent lands", () => {
+    const s = init(2);
+    const res = simulateShot(s, { angle: 70, power: 55, weaponId: "cluster" });
+    // 1 parent + 5 bomblets (if the parent landed on the board).
+    expect(res.shells.length).toBeGreaterThan(1);
+    const children = res.shells.filter((sh) => sh.startStep > 0);
+    expect(children.length).toBe(5);
+  });
+
+  it("mirv splits into warheads at the apex", () => {
+    const s = init(2);
+    const res = simulateShot(s, { angle: 80, power: 70, weaponId: "mirv" });
+    expect(res.shells.filter((sh) => sh.startStep > 0).length).toBe(4);
+  });
+
+  it("roller produces a single shell with a long (flight + roll) path", () => {
+    const s = init(2);
+    const res = simulateShot(s, { angle: 35, power: 60, weaponId: "roller" });
+    expect(res.shells).toHaveLength(1);
+    expect(res.shells[0].path.length).toBeGreaterThan(3);
   });
 
   it("re-simulates identically on a copy (server/client determinism)", () => {
     const s = init(2);
-    const shot: ShotInput = { angle: 55, power: 62, weaponId: "shell" };
+    const shot: ShotInput = { angle: 55, power: 62, weaponId: "cluster" };
     const a = simulateShot(s, shot);
     const b = simulateShot(structuredClone(s), shot);
     expect(stateHash(a.endState)).toBe(stateHash(b.endState));
+    expect(a.shells.length).toBe(b.shells.length);
   });
 });

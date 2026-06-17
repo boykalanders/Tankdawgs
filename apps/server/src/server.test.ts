@@ -126,7 +126,7 @@ describe("TankDawgs server (dev mode)", () => {
     const shot = await shotPromise;
     expect(shot.bySeat).toBe(0);
     expect(shot.endStateHash).toMatch(/^[0-9a-f]{8}$/);
-    expect(shot.trajectories[0].length).toBeGreaterThan(2);
+    expect(shot.shells[0].path.length).toBeGreaterThan(2);
     expect(shot.endState.tanks).toHaveLength(2);
   });
 

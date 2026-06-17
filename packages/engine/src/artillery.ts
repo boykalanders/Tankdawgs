@@ -2,6 +2,7 @@ import type {
   DamageEvent,
   GameState,
   Point,
+  Shell,
   ShotInput,
   ShotResult,
   Tank,
@@ -212,6 +213,34 @@ function simulatePellet(
   return { path, impact: { x, y } };
 }
 
+/** Roll a landed shell downhill along the surface from `impact`, stopping at a
+ *  valley (uphill ahead), a tank, the edge, or after maxDist. */
+function rollAlong(
+  terrain: number[],
+  width: number,
+  impact: Point,
+  dir: number,
+  maxDist: number,
+  tanks: Tank[]
+): { path: Point[]; end: Point } {
+  const step = dir >= 0 ? 1 : -1;
+  let x = Math.round(impact.x);
+  const path: Point[] = [];
+  for (let d = 0; d < maxDist; d++) {
+    const nx = x + step;
+    if (nx < 0 || nx >= width) break;
+    // Stop if the ground ahead rises (uphill) — settle in the dip.
+    if (terrain[nx] < terrain[x] - 1) break;
+    x = nx;
+    if (d % 4 === 0) path.push({ x, y: terrain[x] - 3 });
+    // Stop on a tank in the path.
+    if (tanks.some((t) => t.alive && Math.abs(t.x - x) <= 6)) break;
+  }
+  const end: Point = { x, y: terrain[clampX(x, width)] };
+  path.push(end);
+  return { path, end };
+}
+
 /** Deterministically resolve a shot — must pass validateShot first. */
 export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
   const weapon = weaponById(shot.weaponId) ?? weaponById(DEFAULT_WEAPON);
@@ -223,32 +252,121 @@ export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
     y: terrain[clampX(shooter.x, width)] - MUZZLE_RISE,
   };
 
-  const trajectories: Point[][] = [];
-  const impacts: Point[] = [];
+  const shells: Shell[] = [];
   const dealt = new Map<number, number>(); // seat → damage
+  let rngSeed = state.seed ^ 0x5bd1e995;
+  const rng = () => {
+    rngSeed = nextSeed(rngSeed);
+    return rand01(rngSeed);
+  };
 
-  for (let p = 0; p < weapon.pellets; p++) {
-    const offset =
-      weapon.pellets > 1
-        ? (p - (weapon.pellets - 1) / 2) * (weapon.spreadDeg / (weapon.pellets - 1))
-        : 0;
-    const { path, impact } = simulatePellet(origin, shot.angle + offset, shot.power, state, terrain);
-    trajectories.push(path);
-    if (!impact) continue;
-    impacts.push(impact);
-
-    // Damage every alive tank within the blast (falloff to 0 at the edge),
-    // using centres BEFORE this pellet carves, then carve the crater.
+  // Apply one explosion: blast-falloff damage to alive tanks, then carve.
+  const explode = (impact: Point, radius: number, maxDamage: number, dig: number): void => {
     for (const t of state.tanks) {
       if (!t.alive) continue;
       const c = tankCentre(t, terrain, width);
       const dist = Math.hypot(impact.x - c.x, impact.y - c.y);
-      if (dist <= weapon.blastRadius) {
-        const dmg = weapon.maxDamage * (1 - dist / weapon.blastRadius);
-        dealt.set(t.seat, (dealt.get(t.seat) ?? 0) + dmg);
+      if (dist <= radius) {
+        dealt.set(t.seat, (dealt.get(t.seat) ?? 0) + maxDamage * (1 - dist / radius));
       }
     }
-    carve(terrain, width, impact.x, impact.y, weapon.blastRadius, weapon.digFactor);
+    carve(terrain, width, impact.x, impact.y, radius, dig);
+  };
+  const fire = (angle: number, power: number, from: Point = origin) =>
+    simulatePellet(from, angle, power, state, terrain);
+  const R = weapon.blastRadius;
+  const D = weapon.maxDamage;
+  const G = weapon.digFactor;
+
+  switch (weapon.kind) {
+    case "fan": {
+      for (let p = 0; p < weapon.count; p++) {
+        const offset = (p - (weapon.count - 1) / 2) * (weapon.spreadDeg / Math.max(1, weapon.count - 1));
+        const { path, impact } = fire(shot.angle + offset, shot.power);
+        if (impact) explode(impact, R, D, G);
+        shells.push({ path, impact, startStep: 0, weaponId: weapon.id });
+      }
+      break;
+    }
+    case "cluster": {
+      const primary = fire(shot.angle, shot.power);
+      shells.push({ path: primary.path, impact: primary.impact, startStep: 0, weaponId: weapon.id });
+      if (primary.impact) {
+        const at = primary.path.length; // children appear when the shell lands
+        for (let i = 0; i < weapon.count; i++) {
+          const angle = 55 + rng() * 70; // up-and-out
+          const power = 20 + rng() * 16;
+          const from: Point = { x: primary.impact.x, y: primary.impact.y - 4 };
+          const { path, impact } = fire(angle, power, from);
+          if (impact) explode(impact, R, D, G);
+          shells.push({ path, impact, startStep: at, weaponId: weapon.id });
+        }
+      }
+      break;
+    }
+    case "mirv": {
+      const primary = fire(shot.angle, shot.power);
+      // Split at the apex (highest point = min y).
+      let apex = 0;
+      for (let i = 1; i < primary.path.length; i++) if (primary.path[i].y < primary.path[apex].y) apex = i;
+      const apexPt = primary.path[apex];
+      shells.push({ path: primary.path.slice(0, apex + 1), impact: null, startStep: 0, weaponId: weapon.id });
+      const at = apex;
+      for (let i = 0; i < weapon.count; i++) {
+        const angle = 50 + (i * 80) / Math.max(1, weapon.count - 1) + rng() * 6; // 50…130 spread
+        const power = 16 + rng() * 10;
+        const { path, impact } = fire(angle, power, { x: apexPt.x, y: apexPt.y });
+        if (impact) explode(impact, R, D, G);
+        shells.push({ path, impact, startStep: at, weaponId: weapon.id });
+      }
+      break;
+    }
+    case "roller": {
+      const primary = fire(shot.angle, shot.power);
+      if (primary.impact) {
+        const dir = primary.path.length >= 2
+          ? Math.sign(primary.path[primary.path.length - 1].x - primary.path[primary.path.length - 2].x) || 1
+          : 1;
+        const rolled = rollAlong(terrain, width, primary.impact, dir, 220, state.tanks);
+        explode(rolled.end, R, D, G);
+        shells.push({
+          path: primary.path.concat(rolled.path),
+          impact: rolled.end,
+          startStep: 0,
+          weaponId: weapon.id,
+        });
+      } else {
+        shells.push({ path: primary.path, impact: null, startStep: 0, weaponId: weapon.id });
+      }
+      break;
+    }
+    case "napalm": {
+      const primary = fire(shot.angle, shot.power);
+      shells.push({ path: primary.path, impact: primary.impact, startStep: 0, weaponId: weapon.id });
+      if (primary.impact) {
+        explode(primary.impact, R, D, G);
+        const at = primary.path.length;
+        for (let i = 0; i < weapon.count; i++) {
+          const off = (i - (weapon.count - 1) / 2) * 26;
+          const fx = clampX(primary.impact.x + off, width);
+          const fy = terrain[fx] - 2;
+          explode({ x: fx, y: fy }, R * 0.7, D * 0.7, G * 0.5);
+          shells.push({
+            path: [{ x: primary.impact.x, y: primary.impact.y }, { x: fx, y: fy }],
+            impact: { x: fx, y: fy },
+            startStep: at,
+            weaponId: weapon.id,
+          });
+        }
+      }
+      break;
+    }
+    default: {
+      // "single"
+      const { path, impact } = fire(shot.angle, shot.power);
+      if (impact) explode(impact, R, D, G);
+      shells.push({ path, impact, startStep: 0, weaponId: weapon.id });
+    }
   }
 
   // Apply damage and recompute survival.
@@ -289,7 +407,7 @@ export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
         seed: advancedSeed,
       };
 
-  return { trajectories, impacts, damage, endState, outcome: { gameOver, winner } };
+  return { shells, damage, endState, outcome: { gameOver, winner } };
 }
 
 // ─────────────────────────── hashing ───────────────────────────

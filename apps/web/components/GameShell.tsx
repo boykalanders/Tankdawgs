@@ -7,6 +7,7 @@ import { useAccount } from "wagmi";
 import {
   WEAPON_LIST,
   DEFAULT_WEAPON,
+  weaponById,
   type GameState,
   type ShotInput,
 } from "@tankdawgs/engine";
@@ -234,6 +235,9 @@ export default function GameShell({
               FIRE
             </button>
           </div>
+          <p className="md:col-span-3 -mt-1 text-center text-[11px] italic text-cream/45">
+            {weaponById(weaponId).name} — {weaponById(weaponId).blurb}
+          </p>
         </div>
 
         {/* ── status + money ── */}

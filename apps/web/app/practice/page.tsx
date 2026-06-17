@@ -60,7 +60,7 @@ export default function PracticePage() {
       setBanner(null);
       const res = simulateShot(state, shot);
       pendingEnd.current = res.endState;
-      setAnim({ trajectories: res.trajectories, impacts: res.impacts });
+      setAnim({ shells: res.shells });
     },
     [anim, state]
   );
