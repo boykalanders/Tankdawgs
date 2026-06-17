@@ -120,7 +120,7 @@ export default function GameShell({
     <>
       <div className="relative mx-auto flex min-h-[560px] w-full max-w-[1180px] flex-col gap-2 rounded-3xl border border-gold-dim/40 bg-emerald-deep/85 p-3 shadow-2xl shadow-felt-inset">
         {/* ── header: config · ½ players · badge · ½ players · wind · chat ── */}
-        <div className="flex items-center gap-2 px-1">
+        <header className="flex items-center gap-2.5 rounded-2xl border border-gold-dim/25 bg-gradient-to-b from-black/45 to-black/15 px-3 py-2 shadow-inner">
           <div className="relative shrink-0">
             <IconButton icon={<IconMenu />} active={menuOpen} onClick={() => setMenuOpen((v) => !v)} title="Config" />
             {menuOpen && (
@@ -153,8 +153,10 @@ export default function GameShell({
             )}
           </div>
 
+          <Divider />
+
           {/* left half of the roster */}
-          <div className="flex flex-1 flex-wrap items-center justify-end gap-1.5">
+          <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
             {players.slice(0, Math.ceil(players.length / 2)).map((p) => (
               <PlayerCard
                 key={p.seat}
@@ -166,16 +168,19 @@ export default function GameShell({
             ))}
           </div>
 
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/assets/logo.svg"
-            alt="Tank Dawgs"
-            className="pointer-events-none h-12 w-auto shrink-0 drop-shadow-[0_4px_10px_rgba(0,0,0,0.7)]"
-            draggable={false}
-          />
+          {/* center badge */}
+          <div className="flex shrink-0 items-center px-1">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/assets/logo.svg"
+              alt="Tank Dawgs"
+              className="pointer-events-none h-14 w-auto drop-shadow-[0_4px_14px_rgba(0,0,0,0.8)]"
+              draggable={false}
+            />
+          </div>
 
           {/* right half of the roster */}
-          <div className="flex flex-1 flex-wrap items-center justify-start gap-1.5">
+          <div className="flex flex-1 flex-wrap items-center justify-start gap-2">
             {players.slice(Math.ceil(players.length / 2)).map((p) => (
               <PlayerCard
                 key={p.seat}
@@ -187,7 +192,9 @@ export default function GameShell({
             ))}
           </div>
 
+          <Divider />
           <WindGauge wind={state.wind} />
+          <Divider />
 
           <div className="relative shrink-0">
             <IconButton icon={<IconChat />} active={chatOpen} onClick={() => setChatOpen((v) => !v)} disabled={!chat} title="Comms" />
@@ -197,7 +204,7 @@ export default function GameShell({
               </span>
             )}
           </div>
-        </div>
+        </header>
 
         {/* ── battlefield ── */}
         <div className="relative">
@@ -323,6 +330,11 @@ export default function GameShell({
       )}
     </>
   );
+}
+
+/** Thin vertical separator between header zones. */
+function Divider() {
+  return <span className="hidden h-10 w-px shrink-0 bg-gold-dim/25 sm:block" />;
 }
 
 function DriveButton({ dir, disabled, onClick }: { dir: number; disabled?: boolean; onClick: () => void }) {

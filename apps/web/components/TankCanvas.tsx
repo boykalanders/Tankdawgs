@@ -54,17 +54,51 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
   const stateRef = useRef(state);
   const aimRef = useRef(aim);
   const mutedRef = useRef(muted);
+  // Per-seat displayed x, eased toward the authoritative x so drives slide.
+  const displayedRef = useRef<number[]>([]);
   stateRef.current = state;
   aimRef.current = aim;
   mutedRef.current = muted;
 
-  // Static render — when no shot is animating.
+  // Idle render — eases each tank toward its authoritative x (drive slide),
+  // then settles. Runs whenever the state/aim changes and no shot is animating.
   useEffect(() => {
     if (animation) return;
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
-    drawScene(ctx, canvas, stateRef.current, aimRef.current ?? null, mySeat, { heads: [], trails: [], bursts: [], recoil: 0 });
+    const tanks = stateRef.current.tanks;
+    if (displayedRef.current.length !== tanks.length) displayedRef.current = tanks.map((t) => t.x);
+
+    let raf: number | null = null;
+    const ease = () => {
+      const st = stateRef.current;
+      let moving = false;
+      for (const t of st.tanks) {
+        const cur = displayedRef.current[t.seat] ?? t.x;
+        const d = t.x - cur;
+        if (Math.abs(d) > 0.4) {
+          displayedRef.current[t.seat] = cur + d * 0.3;
+          moving = true;
+        } else {
+          displayedRef.current[t.seat] = t.x;
+        }
+      }
+      drawScene(
+        ctx,
+        canvas,
+        st,
+        aimRef.current ?? null,
+        mySeat,
+        { heads: [], trails: [], bursts: [], recoil: 0 },
+        (seat) => displayedRef.current[seat] ?? st.tanks[seat].x
+      );
+      raf = moving ? requestAnimationFrame(ease) : null;
+    };
+    ease();
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+    };
   }, [state, aim, mySeat, animation]);
 
   // Animated render — steps every shell along its (staged) path, fires muzzle
@@ -82,6 +116,8 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
     const bursts: Burst[] = [];
     const burstFired = new Set<number>();
     let frame = 0;
+    // Positions are settled when a shot fires; sync so tanks render in place.
+    displayedRef.current = stateRef.current.tanks.map((t) => t.x);
     if (!mutedRef.current) playFire(); // cannon report at launch
 
     const tick = () => {
@@ -108,12 +144,20 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
       const live = bursts.filter((b) => frame - b.born < FADE);
       const recoil = Math.max(0, 1 - frame / 7); // 0..1 over the first ~7 frames
 
-      drawScene(ctx, canvas, stateRef.current, null, mySeat, {
-        heads,
-        trails,
-        bursts: live.map((b) => ({ ...b, age: (frame - b.born) / FADE })),
-        recoil,
-      });
+      drawScene(
+        ctx,
+        canvas,
+        stateRef.current,
+        null,
+        mySeat,
+        {
+          heads,
+          trails,
+          bursts: live.map((b) => ({ ...b, age: (frame - b.born) / FADE })),
+          recoil,
+        },
+        (seat) => displayedRef.current[seat] ?? stateRef.current.tanks[seat].x
+      );
 
       const flying = shells.some((s) => simStep < s.startStep + s.path.length - 1);
       if (!flying && live.length === 0) {
@@ -156,7 +200,8 @@ function drawScene(
   state: GameState,
   aim: { angle: number; power: number } | null,
   mySeat: number | null,
-  overlay: Overlay
+  overlay: Overlay,
+  posOf?: (seat: number) => number
 ): void {
   const W = canvas.width;
   const H = canvas.height;
@@ -197,13 +242,14 @@ function drawScene(
 
   // Tanks.
   for (const tank of state.tanks) {
-    const surfX = Math.min(state.terrain.length - 1, Math.max(0, Math.round(tank.x)));
+    const drawX = posOf ? posOf(tank.seat) : tank.x;
+    const surfX = Math.min(state.terrain.length - 1, Math.max(0, Math.round(drawX)));
     const ty = state.terrain[surfX];
     const onTurn = !state.gameOver && state.turn === tank.seat;
     const useAim = aim && mySeat === tank.seat ? aim : { angle: tank.angle, power: tank.power };
-    drawTank(ctx, tank.x, ty, tank.seat, useAim.angle, tank.alive, tank.health, onTurn, onTurn ? overlay.recoil : 0);
+    drawTank(ctx, drawX, ty, tank.seat, useAim.angle, tank.alive, tank.health, onTurn, onTurn ? overlay.recoil : 0);
     // Wind read-out above the tank whose turn it is.
-    if (onTurn && tank.alive) drawWindTag(ctx, tank.x, Math.max(16, ty - 66), state.wind);
+    if (onTurn && tank.alive) drawWindTag(ctx, drawX, Math.max(16, ty - 66), state.wind);
   }
 
   // Shell trails + heads.
