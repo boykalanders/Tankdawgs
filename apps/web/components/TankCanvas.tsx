@@ -36,6 +36,10 @@ interface TankCanvasProps {
   onAnimationEnd?: () => void;
 }
 
+/** How fast a driving tank rolls, in world units per frame (~60fps). Low =
+ *  slow, deliberate tread movement. */
+const DRIVE_SPEED = 1.4;
+
 const seatColor = (seat: number) => SEAT_COLORS[seat % SEAT_COLORS.length];
 
 interface Burst {
@@ -77,8 +81,10 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
       for (const t of st.tanks) {
         const cur = displayedRef.current[t.seat] ?? t.x;
         const d = t.x - cur;
-        if (Math.abs(d) > 0.4) {
-          displayedRef.current[t.seat] = cur + d * 0.3;
+        // Constant-speed roll (≈ DRIVE_SPEED world-units/frame) so the tank
+        // trundles like real treads instead of easing/snapping into place.
+        if (Math.abs(d) > DRIVE_SPEED) {
+          displayedRef.current[t.seat] = cur + Math.sign(d) * DRIVE_SPEED;
           moving = true;
         } else {
           displayedRef.current[t.seat] = t.x;
