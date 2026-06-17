@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" fill="none">
+  <!-- Faint battlefield emblem for the hero backdrop (low opacity). -->
+  <g fill="#d8cba8">
+    <!-- hills silhouette -->
+    <path d="M0 230 Q80 180 160 210 T320 200 T400 220 V300 H0 Z" opacity="0.5"/>
+    <!-- tank -->
+    <rect x="150" y="150" width="70" height="6" rx="3" transform="rotate(-25 150 153)"/>
+    <path d="M150 168 h36 a6 6 0 0 1 6 6 v2 h-48 v-2 a6 6 0 0 1 6 -6 z"/>
+    <rect x="132" y="180" width="84" height="16" rx="5"/>
+    <rect x="128" y="196" width="92" height="14" rx="7"/>
+  </g>
+  <!-- shell arc -->
+  <path d="M150 150 Q250 60 330 150" stroke="#d8cba8" stroke-width="3" stroke-dasharray="5 8" fill="none" opacity="0.6"/>
+  <circle cx="330" cy="150" r="6" fill="#d8cba8" opacity="0.7"/>
+</svg>

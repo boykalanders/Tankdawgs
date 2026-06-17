@@ -1,0 +1,145 @@
+"use client";
+
+import { useEffect, useState, type ReactNode } from "react";
+import { ConnectButton } from "@rainbow-me/rainbowkit";
+import {
+  useAccount,
+  usePublicClient,
+  useReadContract,
+  useSwitchChain,
+  useWriteContract,
+} from "wagmi";
+import { TANK_DAWGS_ABI, TANK_DAWGS_NFT_ABI } from "@tankdawgs/shared";
+import {
+  CHAIN_ID,
+  CONTRACTS_CONFIGURED,
+  NETWORK_NAME,
+  TANKDAWGS_ADDRESS,
+  TANKDAWGS_NFT_ADDRESS,
+} from "@/lib/env";
+import { log } from "@/lib/log";
+
+/**
+ * Play gate. A wallet may enter if the TankDawgs contract's `ownsNFT` is true —
+ * i.e. it holds the TankDawgs membership pass OR (grandfather) a ChessDawgs
+ * NFT. Otherwise we offer a one-tap mint of a pass. When contracts aren't
+ * configured for the active network (e.g. mainnet pre-deploy) it only requires
+ * a connected wallet (look-and-feel build).
+ */
+export default function WalletGate({ children }: { children: ReactNode }) {
+  const { address, isConnected, chainId } = useAccount();
+  const publicClient = usePublicClient();
+  const { writeContractAsync } = useWriteContract();
+  const { switchChain, isPending: switching } = useSwitchChain();
+  const [minting, setMinting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const {
+    data: owns,
+    isLoading,
+    refetch,
+  } = useReadContract({
+    address: TANKDAWGS_ADDRESS ?? undefined,
+    abi: TANK_DAWGS_ABI,
+    functionName: "ownsNFT",
+    args: address ? [address] : undefined,
+    query: { enabled: Boolean(CONTRACTS_CONFIGURED && address) },
+  });
+
+  useEffect(() => {
+    log.info("gate:", { connected: isConnected, address, walletChain: chainId, expectedChain: CHAIN_ID });
+  }, [isConnected, address, chainId]);
+
+  useEffect(() => {
+    if (CONTRACTS_CONFIGURED && address && !isLoading) {
+      log.info("gate: ownsNFT =", owns, "(pool pass or ChessDawgs NFT)");
+    }
+  }, [owns, isLoading, address]);
+
+  async function mint() {
+    if (!TANKDAWGS_NFT_ADDRESS || !publicClient) return;
+    setError(null);
+    setMinting(true);
+    log.info("gate: minting pass at", TANKDAWGS_NFT_ADDRESS);
+    try {
+      const hash = await writeContractAsync({
+        address: TANKDAWGS_NFT_ADDRESS,
+        abi: TANK_DAWGS_NFT_ABI,
+        functionName: "mint",
+      });
+      log.info("gate: mint tx", hash, "— waiting…");
+      await publicClient.waitForTransactionReceipt({ hash });
+      await refetch();
+      log.info("gate: mint confirmed");
+    } catch (e) {
+      log.error("gate: mint failed —", e);
+      setError(e instanceof Error ? e.message.split("\n")[0] : "Mint failed");
+    } finally {
+      setMinting(false);
+    }
+  }
+
+  if (!isConnected) {
+    return (
+      <div className="panel mx-auto flex max-w-md flex-col items-center gap-4 p-10 text-center">
+        <h2 className="heading-display text-2xl">Wallet required</h2>
+        <p className="text-sm text-amber-100/60">
+          Connect your wallet to play TankDawgs on{" "}
+          <span className="text-gold">{NETWORK_NAME}</span>.
+        </p>
+        <ConnectButton />
+      </div>
+    );
+  }
+
+  // Wrong network → every contract call (approve/join/mint) would revert.
+  // Force the correct chain before anything else.
+  if (CONTRACTS_CONFIGURED && chainId !== CHAIN_ID) {
+    return (
+      <div className="panel mx-auto flex max-w-md flex-col items-center gap-4 p-10 text-center">
+        <div className="text-4xl">🔌</div>
+        <h2 className="heading-display text-2xl">Wrong network</h2>
+        <p className="text-sm text-amber-100/60">
+          TankDawgs runs on <span className="text-gold">{NETWORK_NAME}</span>. Your
+          wallet is on a different network — switch to continue.
+        </p>
+        <button
+          className="btn-gold"
+          disabled={switching}
+          onClick={() => switchChain({ chainId: CHAIN_ID })}
+        >
+          {switching ? "Switching…" : `Switch to ${NETWORK_NAME}`}
+        </button>
+        <ConnectButton showBalance={false} />
+      </div>
+    );
+  }
+
+  if (CONTRACTS_CONFIGURED) {
+    if (isLoading) {
+      return <p className="py-10 text-center text-amber-100/60">Checking your pass…</p>;
+    }
+    if (!owns) {
+      return (
+        <div className="panel mx-auto max-w-md space-y-4 p-10 text-center">
+          <div className="text-4xl">🎟️</div>
+          <h2 className="heading-display text-2xl">Mint your Tank Dawgs pass</h2>
+          <p className="text-sm text-amber-100/60">
+            A Tank Dawgs NFT is your seat at the table. Mint one (free) to start
+            staking $DDawgs.
+          </p>
+          <button className="btn-gold w-full" disabled={minting} onClick={mint}>
+            {minting ? "Minting…" : "Mint pass"}
+          </button>
+          {error && <p className="text-sm text-red-300">{error}</p>}
+          <p className="text-xs text-amber-100/40">
+            Already hold a <span className="text-gold">ChessDawgs</span> NFT?
+            You&rsquo;re in automatically — no mint needed.
+          </p>
+        </div>
+      );
+    }
+  }
+
+  return <>{children}</>;
+}
