@@ -120,7 +120,7 @@ export default function GameShell({
     <>
       <div className="relative mx-auto flex min-h-[560px] w-full max-w-[1180px] flex-col gap-2 rounded-3xl border border-gold-dim/40 bg-emerald-deep/85 p-3 shadow-2xl shadow-felt-inset">
         {/* ── header: config · ½ players · badge · ½ players · wind · chat ── */}
-        <header className="flex items-center gap-2.5 rounded-2xl border border-gold-dim/25 bg-gradient-to-b from-black/45 to-black/15 px-3 py-2 shadow-inner">
+        <header className="flex min-h-[68px] items-center gap-3 rounded-2xl border border-gold-dim/25 bg-gradient-to-b from-black/45 to-black/15 px-3 py-2 shadow-inner">
           <div className="relative shrink-0">
             <IconButton icon={<IconMenu />} active={menuOpen} onClick={() => setMenuOpen((v) => !v)} title="Config" />
             {menuOpen && (
@@ -153,10 +153,8 @@ export default function GameShell({
             )}
           </div>
 
-          <Divider />
-
-          {/* left half of the roster */}
-          <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
+          {/* left half of the roster — hugs the config side */}
+          <div className="flex flex-1 flex-wrap items-center justify-start gap-2">
             {players.slice(0, Math.ceil(players.length / 2)).map((p) => (
               <PlayerCard
                 key={p.seat}
@@ -169,18 +167,19 @@ export default function GameShell({
           </div>
 
           {/* center badge */}
-          <div className="flex shrink-0 items-center px-1">
+          <div className="relative flex shrink-0 items-center justify-center px-2">
+            <div className="absolute inset-0 -z-0 bg-[radial-gradient(ellipse_at_center,rgba(232,197,71,0.12),transparent_70%)]" />
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/assets/logo.svg"
               alt="Tank Dawgs"
-              className="pointer-events-none h-14 w-auto drop-shadow-[0_4px_14px_rgba(0,0,0,0.8)]"
+              className="pointer-events-none relative h-14 w-auto drop-shadow-[0_4px_14px_rgba(0,0,0,0.85)]"
               draggable={false}
             />
           </div>
 
-          {/* right half of the roster */}
-          <div className="flex flex-1 flex-wrap items-center justify-start gap-2">
+          {/* right half of the roster — hugs the wind/chat side */}
+          <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
             {players.slice(Math.ceil(players.length / 2)).map((p) => (
               <PlayerCard
                 key={p.seat}
