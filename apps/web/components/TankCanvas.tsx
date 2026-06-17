@@ -9,6 +9,7 @@ import {
   type Point,
   type Shell,
 } from "@tankdawgs/engine";
+import { playBoom, playFire } from "@/lib/sound";
 
 /** Per-seat tank colours (battlefield palette). */
 const SEAT_COLORS = [
@@ -31,6 +32,7 @@ interface TankCanvasProps {
   mySeat: number | null;
   aim?: { angle: number; power: number } | null;
   animation?: ShotAnimation | null;
+  muted?: boolean;
   onAnimationEnd?: () => void;
 }
 
@@ -46,13 +48,15 @@ interface Burst {
 
 /** Canvas renderer for the artillery battlefield: terrain, luxe tanks, health
  *  bars, the active barrel, and staged per-weapon shell trajectories. */
-export default function TankCanvas({ state, mySeat, aim, animation, onAnimationEnd }: TankCanvasProps) {
+export default function TankCanvas({ state, mySeat, aim, animation, muted, onAnimationEnd }: TankCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number | null>(null);
   const stateRef = useRef(state);
   const aimRef = useRef(aim);
+  const mutedRef = useRef(muted);
   stateRef.current = state;
   aimRef.current = aim;
+  mutedRef.current = muted;
 
   // Static render — when no shot is animating.
   useEffect(() => {
@@ -78,6 +82,7 @@ export default function TankCanvas({ state, mySeat, aim, animation, onAnimationE
     const bursts: Burst[] = [];
     const burstFired = new Set<number>();
     let frame = 0;
+    if (!mutedRef.current) playFire(); // cannon report at launch
 
     const tick = () => {
       frame += 1;
@@ -96,6 +101,7 @@ export default function TankCanvas({ state, mySeat, aim, animation, onAnimationE
         } else if (shell.impact && !burstFired.has(i)) {
           burstFired.add(i);
           bursts.push({ x: shell.impact.x, y: shell.impact.y, color: w.style.burst, radius: w.blastRadius, born: frame });
+          if (!mutedRef.current) playBoom(w.blastRadius);
         }
       });
 
@@ -196,6 +202,8 @@ function drawScene(
     const onTurn = !state.gameOver && state.turn === tank.seat;
     const useAim = aim && mySeat === tank.seat ? aim : { angle: tank.angle, power: tank.power };
     drawTank(ctx, tank.x, ty, tank.seat, useAim.angle, tank.alive, tank.health, onTurn, onTurn ? overlay.recoil : 0);
+    // Wind read-out above the tank whose turn it is.
+    if (onTurn && tank.alive) drawWindTag(ctx, tank.x, Math.max(16, ty - 66), state.wind);
   }
 
   // Shell trails + heads.
@@ -387,6 +395,26 @@ function drawTank(
     ctx.arc(bx, by, fr, 0, Math.PI * 2);
     ctx.fill();
   }
+}
+
+/** Wind banner drawn above the active tank — direction arrow + strength. */
+function drawWindTag(ctx: CanvasRenderingContext2D, x: number, y: number, wind: number): void {
+  const pct = Math.round(Math.abs(wind) * 100);
+  const txt = wind === 0 ? "WIND  CALM" : `WIND  ${wind > 0 ? "▶" : "◀"} ${pct}`;
+  ctx.font = "bold 15px ui-sans-serif, system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const w = ctx.measureText(txt).width + 18;
+  ctx.fillStyle = "rgba(0,0,0,0.62)";
+  roundRect(ctx, x - w / 2, y - 11, w, 22, 6);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(232,197,71,0.5)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = pct >= 60 ? "#ff8c5a" : "#e8c547";
+  ctx.fillText(txt, x, y);
+  ctx.textAlign = "start";
+  ctx.textBaseline = "alphabetic";
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {

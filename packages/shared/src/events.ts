@@ -43,6 +43,8 @@ export interface ClientToServerEvents {
   "room:join": (p: { gameId: string; auth: AuthPayload }) => void;
   "room:leave": (p: { gameId: string }) => void;
   "game:fire": (p: { gameId: string; shot: ShotInput }) => void;
+  /** Drive the tank one step on your turn (dir −1 = west, +1 = east). */
+  "game:drive": (p: { gameId: string; dir: number }) => void;
   "game:resign": (p: { gameId: string }) => void;
   "chat:send": (p: { gameId: string; text: string }) => void;
   /** Fetch a wallet's profile (name, stats, claimable wins). */

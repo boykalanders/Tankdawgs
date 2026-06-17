@@ -24,6 +24,12 @@ const TANK_HIT_RADIUS = 14; // a pellet striking within this hits the tank
 const MIN_GROUND = Math.round(WORLD_HEIGHT * 0.28); // highest a peak can be
 const MAX_GROUND = Math.round(WORLD_HEIGHT * 0.92); // lowest a valley can be
 
+/** Drive steps a tank may take per turn, and the world distance per step. */
+export const MOVES_PER_TURN = 5;
+const MOVE_STEP = 22;
+/** A tank can't climb a step steeper than this (world units of rise). */
+const MAX_CLIMB = 60;
+
 // ─────────────────────────── deterministic RNG ───────────────────────────
 /** Numeric LCG step — deterministic, no Math.random (would break sync). */
 function nextSeed(seed: number): number {
@@ -117,10 +123,36 @@ export function createInitialState(opts: InitOptions): GameState {
     turn: 0,
     wind: windFromSeed(windSeed),
     seed: windSeed,
+    movesLeft: MOVES_PER_TURN,
     gameOver: false,
     winner: null,
     moveCount: 0,
   };
+}
+
+/** Drive the tank on turn one step left (dir −1) or right (dir +1), following
+ *  the surface. Consumes a move; refuses if out of moves, off the board, into
+ *  another tank, or up an impassable slope. Returns the (possibly unchanged)
+ *  state. */
+export function driveTank(state: GameState, dir: number): GameState {
+  if (state.gameOver || state.movesLeft <= 0) return state;
+  const step = dir >= 0 ? 1 : -1;
+  const tank = state.tanks[state.turn];
+  if (!tank || !tank.alive) return state;
+
+  const nx = Math.round(tank.x + step * MOVE_STEP);
+  if (nx < 0 || nx >= state.width) return state;
+  // Blocked by another tank in the way.
+  if (state.tanks.some((t) => t.alive && t.seat !== tank.seat && Math.abs(t.x - nx) < 24)) {
+    return state;
+  }
+  // Too steep to climb.
+  const here = state.terrain[clampX(tank.x, state.width)];
+  const there = state.terrain[clampX(nx, state.width)];
+  if (here - there > MAX_CLIMB) return state;
+
+  const tanks = state.tanks.map((t) => (t.seat === tank.seat ? { ...t, x: nx } : { ...t }));
+  return { ...state, tanks, movesLeft: state.movesLeft - 1 };
 }
 
 // ─────────────────────────── validation ───────────────────────────
@@ -170,19 +202,19 @@ function carve(terrain: number[], width: number, ex: number, ey: number, radius:
   }
 }
 
-/** Simulate one pellet from `origin`; returns its polyline and impact (or null
- *  if it flew off the left/right edges). Reads the live (mutating) terrain. */
-function simulatePellet(
+/** Integrate a projectile from an initial velocity; returns its polyline and
+ *  impact (null if it flew off the left/right edges). `ignoreShooterSteps`
+ *  skips shooter self-collision near the muzzle. Reads the live terrain. */
+function integrate(
   origin: Point,
-  angleDeg: number,
-  power: number,
+  vx0: number,
+  vy0: number,
   state: GameState,
-  terrain: number[]
+  terrain: number[],
+  ignoreShooterSteps = 4
 ): { path: Point[]; impact: Point | null } {
-  const rad = (angleDeg * Math.PI) / 180;
-  const speed = power * POWER_SCALE;
-  let vx = Math.cos(rad) * speed;
-  let vy = -Math.sin(rad) * speed; // up is negative y
+  let vx = vx0;
+  let vy = vy0;
   let x = origin.x;
   let y = origin.y;
   const path: Point[] = [{ x, y }];
@@ -196,21 +228,31 @@ function simulatePellet(
     path.push({ x, y });
 
     if (x < 0 || x >= width) return { path, impact: null }; // off the sides
-    // Tank hit (ignore the shooter for the first stretch so it doesn't self-clip
-    // at the muzzle).
     for (const t of state.tanks) {
       if (!t.alive) continue;
-      if (t.seat === turn && step < 4) continue;
+      if (t.seat === turn && step < ignoreShooterSteps) continue;
       const c = tankCentre(t, terrain, width);
       if ((x - c.x) ** 2 + (y - c.y) ** 2 <= TANK_HIT_RADIUS * TANK_HIT_RADIUS) {
         return { path, impact: { x, y } };
       }
     }
-    // Ground hit.
     if (y >= terrain[clampX(x, width)]) return { path, impact: { x, y } };
     if (y >= WORLD_HEIGHT) return { path, impact: { x, y: WORLD_HEIGHT } };
   }
   return { path, impact: { x, y } };
+}
+
+/** Simulate one pellet from `origin` at an angle/power. */
+function simulatePellet(
+  origin: Point,
+  angleDeg: number,
+  power: number,
+  state: GameState,
+  terrain: number[]
+): { path: Point[]; impact: Point | null } {
+  const rad = (angleDeg * Math.PI) / 180;
+  const speed = power * POWER_SCALE;
+  return integrate(origin, Math.cos(rad) * speed, -Math.sin(rad) * speed, state, terrain);
 }
 
 /** Roll a landed shell downhill along the surface from `impact`, stopping at a
@@ -306,18 +348,32 @@ export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
     }
     case "mirv": {
       const primary = fire(shot.angle, shot.power);
-      // Split at the apex (highest point = min y).
+      // Split partway down the descent (past the apex, but high enough to fan
+      // out). Warheads INHERIT the primary's velocity there + a horizontal
+      // spread, so they keep travelling toward — and around — the target.
       let apex = 0;
       for (let i = 1; i < primary.path.length; i++) if (primary.path[i].y < primary.path[apex].y) apex = i;
-      const apexPt = primary.path[apex];
-      shells.push({ path: primary.path.slice(0, apex + 1), impact: null, startStep: 0, weaponId: weapon.id });
-      const at = apex;
+      const k = Math.min(
+        primary.path.length - 2,
+        Math.max(apex + 1, Math.floor(apex + (primary.path.length - apex) * 0.35))
+      );
+      const splitPt = primary.path[Math.max(1, k)];
+      const prev = primary.path[Math.max(0, k - 1)];
+      const baseVx = splitPt.x - prev.x;
+      const baseVy = splitPt.y - prev.y;
+      shells.push({ path: primary.path.slice(0, k + 1), impact: null, startStep: 0, weaponId: weapon.id });
       for (let i = 0; i < weapon.count; i++) {
-        const angle = 50 + (i * 80) / Math.max(1, weapon.count - 1) + rng() * 6; // 50…130 spread
-        const power = 16 + rng() * 10;
-        const { path, impact } = fire(angle, power, { x: apexPt.x, y: apexPt.y });
+        const spread = (i - (weapon.count - 1) / 2) * 1.6; // fan the warheads out
+        const { path, impact } = integrate(
+          { x: splitPt.x, y: splitPt.y },
+          baseVx + spread,
+          baseVy,
+          state,
+          terrain,
+          0
+        );
         if (impact) explode(impact, R, D, G);
-        shells.push({ path, impact, startStep: at, weaponId: weapon.id });
+        shells.push({ path, impact, startStep: k, weaponId: weapon.id });
       }
       break;
     }
@@ -405,6 +461,7 @@ export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
         turn: nextAliveSeat({ ...base }, state.turn),
         wind: windFromSeed(advancedSeed),
         seed: advancedSeed,
+        movesLeft: MOVES_PER_TURN, // fresh drive budget for the next player
       };
 
   return { shells, damage, endState, outcome: { gameOver, winner } };
@@ -427,6 +484,7 @@ export function stateHash(state: GameState): string {
   }
   mix(state.turn);
   mix(Math.round(state.wind * 100));
+  mix(state.movesLeft);
   mix(state.moveCount);
   return (h >>> 0).toString(16).padStart(8, "0");
 }

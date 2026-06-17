@@ -466,6 +466,7 @@ function GameRoom() {
       banner={serverError}
       animation={anim}
       onFire={fire}
+      onDrive={(dir) => getSocket().emit("game:drive", { gameId, dir })}
       onAnimationEnd={onAnimationEnd}
       menuItems={[
         ...(mySeat !== null && !over

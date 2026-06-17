@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
   createInitialState,
+  driveTank,
   simulateShot,
   stateHash,
   validateShot,
   seedFromString,
+  MOVES_PER_TURN,
   WORLD_WIDTH,
   type GameState,
   type ShotInput,
@@ -116,6 +118,25 @@ describe("artillery engine — firing", () => {
     const res = simulateShot(s, { angle: 35, power: 60, weaponId: "roller" });
     expect(res.shells).toHaveLength(1);
     expect(res.shells[0].path.length).toBeGreaterThan(3);
+  });
+
+  it("drives the tank on turn up to MOVES_PER_TURN steps, then stops", () => {
+    let s = init(2);
+    expect(s.movesLeft).toBe(MOVES_PER_TURN);
+    const startX = s.tanks[0].x;
+    for (let i = 0; i < MOVES_PER_TURN; i++) s = driveTank(s, 1);
+    expect(s.tanks[0].x).toBeGreaterThan(startX);
+    expect(s.movesLeft).toBe(0);
+    // No moves left → unchanged.
+    const x = s.tanks[0].x;
+    s = driveTank(s, 1);
+    expect(s.tanks[0].x).toBe(x);
+  });
+
+  it("a fresh turn restores the drive budget", () => {
+    const s = init(2);
+    const res = simulateShot(s, { angle: 60, power: 40, weaponId: "shell" });
+    if (!res.endState.gameOver) expect(res.endState.movesLeft).toBe(MOVES_PER_TURN);
   });
 
   it("re-simulates identically on a copy (server/client determinism)", () => {

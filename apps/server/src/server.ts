@@ -238,6 +238,13 @@ export function createTankDawgsServer(
       });
     });
 
+    socket.on("game:drive", ({ gameId, dir }) => {
+      withRoom(gameId, (room, address) => {
+        const result = room.handleDrive(address, dir);
+        if (!result.ok) socket.emit("server:error", result.error);
+      });
+    });
+
     socket.on("game:resign", ({ gameId }) => {
       withRoom(gameId, (room, address) => {
         const result = room.handleResign(address);

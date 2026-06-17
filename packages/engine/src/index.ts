@@ -3,7 +3,9 @@ export { WEAPONS, WEAPON_LIST, DEFAULT_WEAPON, weaponById } from "./weapons.js";
 export {
   WORLD_WIDTH,
   WORLD_HEIGHT,
+  MOVES_PER_TURN,
   createInitialState,
+  driveTank,
   validateShot,
   simulateShot,
   stateHash,

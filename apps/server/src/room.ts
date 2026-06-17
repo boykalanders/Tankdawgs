@@ -1,9 +1,11 @@
 import {
   createInitialState,
+  driveTank,
   seedFromString,
   simulateShot,
   stateHash,
   validateShot,
+  MOVES_PER_TURN,
   type GameState,
   type ShotInput,
 } from "@tankdawgs/engine";
@@ -154,6 +156,19 @@ export class GameRoom {
     return { ok: true };
   }
 
+  handleDrive(address: Address, dir: number): RoomActionResult {
+    if (this.over) return err("illegal-shot", "game is over");
+    const seat = this.seatOf(address);
+    if (seat === null) return err("not-a-player", "not seated in this game");
+    if (seat !== this.state.turn) return err("not-your-turn", "wait for your turn");
+
+    const next = driveTank(this.state, dir >= 0 ? 1 : -1);
+    if (next === this.state) return { ok: true }; // no move available; ignore
+    this.state = next;
+    this.emitter.broadcastState(this.snapshot());
+    return { ok: true };
+  }
+
   handleResign(address: Address): RoomActionResult {
     if (this.over) return err("illegal-shot", "game is over");
     const seat = this.seatOf(address);
@@ -217,7 +232,7 @@ export class GameRoom {
     }
     // Game continues — advance the turn if the eliminated player was on the clock.
     if (this.state.turn === seat) {
-      this.state = { ...this.state, turn: this.nextAliveSeat(seat) };
+      this.state = { ...this.state, turn: this.nextAliveSeat(seat), movesLeft: MOVES_PER_TURN };
     }
     this.restartClock();
     this.emitter.broadcastState(this.snapshot());

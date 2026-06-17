@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   createInitialState,
+  driveTank,
   simulateShot,
   validateShot,
   type GameState,
@@ -99,6 +100,9 @@ export default function PracticePage() {
       banner={banner}
       animation={anim}
       onFire={fire}
+      onDrive={(dir) => {
+        if (!anim && !state.gameOver) setState((s) => driveTank(s, dir));
+      }}
       onAnimationEnd={onAnimationEnd}
       menuItems={[
         { label: "New battle", onClick: () => reset() },

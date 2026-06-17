@@ -44,6 +44,8 @@ export interface GameState {
   wind: number;
   /** LCG state for deterministic wind progression. */
   seed: number;
+  /** Drive steps the player on turn has left (reset each turn). */
+  movesLeft: number;
   gameOver: boolean;
   /** Winning seat once gameOver (null on a mutual KO / draw). */
   winner: number | null;

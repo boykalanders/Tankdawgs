@@ -47,6 +47,8 @@ interface GameShellProps {
   menuItems: ShellMenuItem[];
   animation?: ShotAnimation | null;
   onFire: (shot: ShotInput) => void;
+  /** Drive the player's tank one step (dir −1 = west, +1 = east). */
+  onDrive?: (dir: number) => void;
   onAnimationEnd: () => void;
   chat?: {
     messages: ChatMessage[];
@@ -71,6 +73,7 @@ export default function GameShell({
   menuItems,
   animation,
   onFire,
+  onDrive,
   onAnimationEnd,
   chat,
   overlay,
@@ -116,10 +119,10 @@ export default function GameShell({
   return (
     <>
       <div className="relative mx-auto flex min-h-[560px] w-full max-w-[1180px] flex-col gap-2 rounded-3xl border border-gold-dim/40 bg-emerald-deep/85 p-3 shadow-2xl shadow-felt-inset">
-        {/* ── top bar ── */}
-        <div className="flex items-center justify-between gap-2 px-1">
-          <div className="relative">
-            <IconButton icon={<IconMenu />} active={menuOpen} onClick={() => setMenuOpen((v) => !v)} title="Menu" />
+        {/* ── header: config · ½ players · badge · ½ players · wind · chat ── */}
+        <div className="flex items-center gap-2 px-1">
+          <div className="relative shrink-0">
+            <IconButton icon={<IconMenu />} active={menuOpen} onClick={() => setMenuOpen((v) => !v)} title="Config" />
             {menuOpen && (
               <div className="absolute left-0 top-[3.25rem] z-30 w-56 overflow-hidden rounded-xl border border-gold-dim/40 bg-emerald-panel shadow-2xl">
                 <button
@@ -150,17 +153,43 @@ export default function GameShell({
             )}
           </div>
 
+          {/* left half of the roster */}
+          <div className="flex flex-1 flex-wrap items-center justify-end gap-1.5">
+            {players.slice(0, Math.ceil(players.length / 2)).map((p) => (
+              <PlayerCard
+                key={p.seat}
+                player={p}
+                health={state.tanks[p.seat]?.health ?? 0}
+                alive={state.tanks[p.seat]?.alive ?? false}
+                isTurn={!state.gameOver && state.turn === p.seat}
+              />
+            ))}
+          </div>
+
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/assets/logo.svg"
             alt="Tank Dawgs"
-            className="pointer-events-none h-14 w-auto drop-shadow-[0_4px_10px_rgba(0,0,0,0.7)]"
+            className="pointer-events-none h-12 w-auto shrink-0 drop-shadow-[0_4px_10px_rgba(0,0,0,0.7)]"
             draggable={false}
           />
 
+          {/* right half of the roster */}
+          <div className="flex flex-1 flex-wrap items-center justify-start gap-1.5">
+            {players.slice(Math.ceil(players.length / 2)).map((p) => (
+              <PlayerCard
+                key={p.seat}
+                player={p}
+                health={state.tanks[p.seat]?.health ?? 0}
+                alive={state.tanks[p.seat]?.alive ?? false}
+                isTurn={!state.gameOver && state.turn === p.seat}
+              />
+            ))}
+          </div>
+
           <WindGauge wind={state.wind} />
 
-          <div className="relative">
+          <div className="relative shrink-0">
             <IconButton icon={<IconChat />} active={chatOpen} onClick={() => setChatOpen((v) => !v)} disabled={!chat} title="Comms" />
             {unread > 0 && !chatOpen && (
               <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full border border-emerald-deep bg-burn px-1 text-[10px] font-bold text-white shadow">
@@ -170,19 +199,6 @@ export default function GameShell({
           </div>
         </div>
 
-        {/* ── player roster ── */}
-        <div className="flex flex-wrap items-center justify-center gap-2">
-          {players.map((p) => (
-            <PlayerCard
-              key={p.seat}
-              player={p}
-              health={state.tanks[p.seat]?.health ?? 0}
-              alive={state.tanks[p.seat]?.alive ?? false}
-              isTurn={!state.gameOver && state.turn === p.seat}
-            />
-          ))}
-        </div>
-
         {/* ── battlefield ── */}
         <div className="relative">
           <TankCanvas
@@ -190,6 +206,7 @@ export default function GameShell({
             mySeat={mySeat}
             aim={interactive ? { angle, power } : null}
             animation={animation}
+            muted={muted}
             onAnimationEnd={onAnimationEnd}
           />
           {clockExpiresAt != null && !state.gameOver && (
@@ -208,36 +225,58 @@ export default function GameShell({
         </div>
 
         {/* ── controls ── */}
-        <div className="grid grid-cols-1 gap-3 rounded-xl border border-gold-dim/30 bg-emerald-panel/60 p-3 md:grid-cols-[1fr_1fr_auto]">
-          <Slider label="Angle" value={angle} min={0} max={180} suffix="°" disabled={!interactive} onChange={setAngle} />
-          <Slider label="Power" value={power} min={1} max={100} suffix="%" disabled={!interactive} onChange={setPower} />
-          <div className="flex items-end gap-2">
-            <label className="flex-1">
-              <span className="mb-1 block text-[10px] uppercase tracking-widest text-cream/50">Weapon</span>
-              <select
-                value={weaponId}
-                disabled={!interactive}
-                onChange={(e) => setWeaponId(e.target.value)}
-                className="w-full rounded-lg border border-gold-dim/40 bg-mahogany-deep px-2 py-2 text-sm text-cream outline-none focus:border-gold disabled:opacity-50"
-              >
-                {WEAPON_LIST.map((w) => (
-                  <option key={w.id} value={w.id}>
+        <div className="space-y-3 rounded-xl border border-gold-dim/30 bg-emerald-panel/60 p-3">
+          {/* Themed weapon picker */}
+          <div>
+            <span className="mb-1.5 block text-[10px] uppercase tracking-widest text-cream/50">Weapon</span>
+            <div className="flex flex-wrap gap-1.5">
+              {WEAPON_LIST.map((w) => {
+                const active = w.id === weaponId;
+                return (
+                  <button
+                    key={w.id}
+                    type="button"
+                    disabled={!interactive}
+                    onClick={() => setWeaponId(w.id)}
+                    title={w.blurb}
+                    className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                      active
+                        ? "border-gold bg-gold/15 text-gold-bright shadow-gold-glow"
+                        : "border-gold-dim/30 bg-mahogany-deep text-cream/70 enabled:hover:border-gold/60 enabled:hover:text-gold-bright"
+                    }`}
+                  >
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ background: w.style.shell }} />
                     {w.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              onClick={fire}
-              disabled={!interactive}
-              className="h-[42px] rounded-lg border-2 border-gold bg-gold/20 px-6 font-display text-lg font-extrabold tracking-widest text-gold-bright shadow-gold-glow transition enabled:hover:brightness-125 disabled:cursor-not-allowed disabled:border-gold/30 disabled:text-cream/40 disabled:shadow-none"
-            >
-              FIRE
-            </button>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1.5 text-[11px] italic text-cream/45">{weaponById(weaponId).blurb}</p>
           </div>
-          <p className="md:col-span-3 -mt-1 text-center text-[11px] italic text-cream/45">
-            {weaponById(weaponId).name} — {weaponById(weaponId).blurb}
-          </p>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_auto]">
+            <Slider label="Angle" value={angle} min={0} max={180} suffix="°" disabled={!interactive} onChange={setAngle} />
+            <Slider label="Power" value={power} min={1} max={100} suffix="%" disabled={!interactive} onChange={setPower} />
+            <div className="flex items-end gap-2">
+              {/* Drive controls — up to MOVES_PER_TURN steps before firing. */}
+              <div className="flex flex-col items-center">
+                <span className="mb-1 text-[10px] uppercase tracking-widest text-cream/50">
+                  Drive · {state.movesLeft}
+                </span>
+                <div className="flex gap-1">
+                  <DriveButton dir={-1} disabled={!interactive || state.movesLeft <= 0 || !onDrive} onClick={() => onDrive?.(-1)} />
+                  <DriveButton dir={1} disabled={!interactive || state.movesLeft <= 0 || !onDrive} onClick={() => onDrive?.(1)} />
+                </div>
+              </div>
+              <button
+                onClick={fire}
+                disabled={!interactive}
+                className="h-[42px] rounded-lg border-2 border-gold bg-gold/20 px-6 font-display text-lg font-extrabold tracking-widest text-gold-bright shadow-gold-glow transition enabled:hover:brightness-125 disabled:cursor-not-allowed disabled:border-gold/30 disabled:text-cream/40 disabled:shadow-none"
+              >
+                FIRE
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* ── status + money ── */}
@@ -286,6 +325,20 @@ export default function GameShell({
   );
 }
 
+function DriveButton({ dir, disabled, onClick }: { dir: number; disabled?: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      title={dir < 0 ? "Drive west" : "Drive east"}
+      className="flex h-[34px] w-9 items-center justify-center rounded-lg border border-gold-dim/40 bg-mahogany-deep text-base text-cream/80 transition enabled:hover:border-gold/60 enabled:hover:text-gold-bright disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      {dir < 0 ? "◀" : "▶"}
+    </button>
+  );
+}
+
 function Slider({
   label,
   value,
@@ -327,11 +380,25 @@ function Slider({
 
 function WindGauge({ wind }: { wind: number }) {
   const pct = Math.round(Math.abs(wind) * 100);
-  const dir = wind > 0 ? "→ E" : "W ←";
+  const calm = wind === 0;
+  const strong = pct >= 60;
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-gold-dim/30 bg-black/40 px-3 py-1.5">
-      <span className="text-[9px] uppercase tracking-widest text-cream/50">Wind</span>
-      <span className="font-mono text-sm font-bold text-gold-bright">{wind === 0 ? "calm" : `${dir} ${pct}`}</span>
+    <div className="flex shrink-0 flex-col items-center rounded-lg border border-gold-dim/40 bg-black/50 px-3 py-1 leading-none">
+      <span className="text-[9px] uppercase tracking-[0.18em] text-cream/55">Wind</span>
+      <span
+        className={`flex items-center gap-1 font-mono text-2xl font-extrabold tabular-nums ${
+          calm ? "text-cream/50" : strong ? "text-burn" : "text-gold-bright"
+        }`}
+      >
+        {calm ? (
+          "—"
+        ) : (
+          <>
+            <span className="text-3xl">{wind > 0 ? "▶" : "◀"}</span>
+            {pct}
+          </>
+        )}
+      </span>
     </div>
   );
 }
