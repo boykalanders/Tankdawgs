@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { parseUnits } from "viem";
-import { useAccount, usePublicClient, useWriteContract } from "wagmi";
+import { useAccount, useChainId, usePublicClient, useSwitchChain, useWriteContract } from "wagmi";
 import {
   ERC20_ABI,
   FAUCET_TOKEN_ABI,
@@ -12,9 +12,11 @@ import {
 } from "@tankdawgs/shared";
 import WalletGate from "@/components/WalletGate";
 import {
+  CHAIN_ID,
   CONTRACTS_CONFIGURED,
   DDAWGS_TOKEN_ADDRESS,
   IS_TESTNET,
+  NETWORK_NAME,
   TANKDAWGS_ADDRESS,
 } from "@/lib/env";
 import { formatStake, shortAddress } from "@/lib/format";
@@ -36,8 +38,12 @@ function Lobby() {
   const router = useRouter();
   const search = useSearchParams();
   const { address } = useAccount();
-  const publicClient = usePublicClient();
+  // Pin reads to the configured chain so they work even when the wallet is
+  // momentarily on a different network.
+  const publicClient = usePublicClient({ chainId: CHAIN_ID });
   const { writeContractAsync } = useWriteContract();
+  const connectedChain = useChainId();
+  const { switchChainAsync } = useSwitchChain();
 
   const [games, setGames] = useState<LobbyGame[]>([]);
   const [maxPlayers, setMaxPlayers] = useState(2);
@@ -59,12 +65,30 @@ function Lobby() {
   }, []);
 
   async function createOnChain() {
-    if (!TANKDAWGS_ADDRESS || !DDAWGS_TOKEN_ADDRESS || !publicClient || !address) return;
     setError(null);
+    if (!TANKDAWGS_ADDRESS || !DDAWGS_TOKEN_ADDRESS) {
+      setError("Contracts aren't configured for this network.");
+      return;
+    }
+    if (!address) {
+      setError("Connect your wallet first.");
+      return;
+    }
+    if (!publicClient) {
+      setError(`No RPC for ${NETWORK_NAME}. Check your network.`);
+      return;
+    }
     setBusy("create");
     try {
       const stake = parseUnits(stakeInput || "0", 18);
-      if (stake <= 0n) throw new Error("Enter a stake");
+      if (stake <= 0n) throw new Error("Enter a stake greater than 0");
+
+      // Make sure the wallet is on the configured chain before we transact —
+      // otherwise the approve/create txs target the wrong network (or silently
+      // never prompt).
+      if (connectedChain !== CHAIN_ID) {
+        await switchChainAsync({ chainId: CHAIN_ID });
+      }
 
       // Pick a code free on-chain; the prefix encodes the seat count.
       let gameId = newGameCode(maxPlayers);
@@ -91,6 +115,7 @@ function Lobby() {
           abi: ERC20_ABI,
           functionName: "approve",
           args: [TANKDAWGS_ADDRESS, stake],
+          chainId: CHAIN_ID,
         });
         await publicClient.waitForTransactionReceipt({ hash: a });
       }
@@ -100,10 +125,12 @@ function Lobby() {
         abi: TANK_DAWGS_ABI,
         functionName: "createGame",
         args: [stake, maxPlayers, gameId],
+        chainId: CHAIN_ID,
       });
       await publicClient.waitForTransactionReceipt({ hash: tx });
       router.push(`/game/${gameId}`);
     } catch (e) {
+      log.error("lobby: create failed", e);
       setError(e instanceof Error ? e.message.split("\n")[0] : "Create failed");
     } finally {
       setBusy(null);
@@ -120,13 +147,16 @@ function Lobby() {
   }
 
   async function faucet() {
+    setError(null);
     if (!DDAWGS_TOKEN_ADDRESS || !publicClient || !address) return;
     setBusy("faucet");
     try {
+      if (connectedChain !== CHAIN_ID) await switchChainAsync({ chainId: CHAIN_ID });
       const tx = await writeContractAsync({
         address: DDAWGS_TOKEN_ADDRESS,
         abi: FAUCET_TOKEN_ABI,
         functionName: "mint",
+        chainId: CHAIN_ID,
         args: [address, parseUnits("10000", 18)],
       });
       await publicClient.waitForTransactionReceipt({ hash: tx });

@@ -35,12 +35,12 @@ interface NetworkContracts {
 const NETWORKS: Record<number, NetworkContracts> = {
   11155111: {
     name: "Sepolia",
-    // TankDawgs is not deployed yet — fill these in after `deploy:sepolia`
-    // (or set the NEXT_PUBLIC_* env vars). Until then the app runs chain-less.
-    poolDawgs: null,
-    ddawgsToken: null,
-    poolDawgsNFT: null,
-    chessDawgsNFT: null,
+    // N-player escrow (deployed 2026-06-17 by deploy:sepolia, mock token/NFT).
+    // Server CONTRACT_ADDRESS must match. resultSigner = owner 0x9456…6B2.
+    poolDawgs: "0x0382bde966f2B379E58614A00b01D069E6f2ae6F",
+    ddawgsToken: "0xF30C8A95D33e5B565F2D965b6c1936857a4F4c4C",
+    poolDawgsNFT: "0xDB45b92DdE171f1600e06D9734f7709fBbb0E706",
+    chessDawgsNFT: "0x98FaC00f53b0d38F4853553bcF88Bb0e420Ef538",
   },
   1: {
     name: "Ethereum",

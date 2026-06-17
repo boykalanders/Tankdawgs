@@ -53,10 +53,11 @@ export function createTankDawgsServer(
   };
 
   const httpServer = createHttpServer((req, res) => {
-    const origin = req.headers.origin;
-    const cors = {
-      "access-control-allow-origin": isAllowedOrigin(origin) ? origin ?? "*" : "null",
-    };
+    // /health and /leaderboard are public, read-only, credential-less JSON, so
+    // they're served with a wildcard CORS header — they don't depend on
+    // CORS_ORIGINS (the WebSocket transport isn't subject to browser CORS, so a
+    // mismatched origin would otherwise break ONLY the leaderboard's fetch()).
+    const cors = { "access-control-allow-origin": "*" };
     if (req.url === "/health") {
       res.writeHead(200, { "content-type": "application/json", ...cors });
       res.end(JSON.stringify({ ok: true, chainEnabled: config.chainEnabled }));

@@ -3,7 +3,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { formatUnits } from "viem";
-import { useAccount, usePublicClient, useReadContract, useSignMessage, useWriteContract } from "wagmi";
+import {
+  useAccount,
+  useChainId,
+  usePublicClient,
+  useReadContract,
+  useSignMessage,
+  useSwitchChain,
+  useWriteContract,
+} from "wagmi";
 import { type GameState, type ShotInput } from "@tankdawgs/engine";
 import {
   ERC20_ABI,
@@ -51,9 +59,11 @@ function GameRoom() {
   const maxPlayers = maxPlayersFromId(gameId);
   const router = useRouter();
   const { address } = useAccount();
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: CHAIN_ID });
   const { signMessageAsync } = useSignMessage();
   const { writeContractAsync } = useWriteContract();
+  const connectedChain = useChainId();
+  const { switchChainAsync } = useSwitchChain();
 
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null);
   const [renderState, setRenderState] = useState<GameState | null>(null);
@@ -73,6 +83,7 @@ function GameRoom() {
     abi: ERC20_ABI,
     functionName: "balanceOf",
     args: address ? [address] : undefined,
+    chainId: CHAIN_ID,
     query: { enabled: Boolean(CONTRACTS_CONFIGURED && address) },
   });
 
@@ -81,6 +92,7 @@ function GameRoom() {
     abi: TANK_DAWGS_ABI,
     functionName: "getGame",
     args: [gameId],
+    chainId: CHAIN_ID,
     query: { enabled: Boolean(CONTRACTS_CONFIGURED && gameId), refetchInterval: 4000 },
   });
 
@@ -208,6 +220,7 @@ function GameRoom() {
     setActionError(null);
     setWorking("join");
     try {
+      if (connectedChain !== CHAIN_ID) await switchChainAsync({ chainId: CHAIN_ID });
       const allowance = (await publicClient.readContract({
         address: DDAWGS_TOKEN_ADDRESS,
         abi: ERC20_ABI,
@@ -220,6 +233,7 @@ function GameRoom() {
           abi: ERC20_ABI,
           functionName: "approve",
           args: [TANKDAWGS_ADDRESS, onchainStake],
+          chainId: CHAIN_ID,
         });
         await publicClient.waitForTransactionReceipt({ hash: a });
       }
@@ -228,6 +242,7 @@ function GameRoom() {
         abi: TANK_DAWGS_ABI,
         functionName: "joinGame",
         args: [gameId],
+        chainId: CHAIN_ID,
       });
       await publicClient.waitForTransactionReceipt({ hash: tx });
       await refetchGame();
@@ -243,11 +258,13 @@ function GameRoom() {
     setActionError(null);
     setWorking("cancel");
     try {
+      if (connectedChain !== CHAIN_ID) await switchChainAsync({ chainId: CHAIN_ID });
       const tx = await writeContractAsync({
         address: TANKDAWGS_ADDRESS,
         abi: TANK_DAWGS_ABI,
         functionName: "cancelGame",
         args: [gameId],
+        chainId: CHAIN_ID,
       });
       await publicClient.waitForTransactionReceipt({ hash: tx });
       router.push("/lobby");

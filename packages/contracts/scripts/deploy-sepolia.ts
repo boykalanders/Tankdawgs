@@ -50,6 +50,13 @@ async function main() {
   );
   await pool.waitForDeployment();
 
+  // The voucher path requires a non-zero resultSigner. The backend signs win
+  // vouchers with its OPERATOR_PRIVATE_KEY ?? OWNER_PRIVATE_KEY — default that
+  // to the deployer (= owner) so the server can sign out of the box. Point this
+  // at a dedicated signer instead if the server uses a separate key.
+  const signer = process.env.RESULT_SIGNER || deployer.address;
+  await (await pool.setResultSigner(signer)).wait();
+
   // Faucet + demo the grandfather path.
   await (await token.mint(deployer.address, FAUCET)).wait();
   await (await token.mint(CLIENT_WALLET, FAUCET)).wait();
@@ -68,6 +75,7 @@ async function main() {
     poolAddress: burn,
     companyWallet: company,
     owner: deployer.address,
+    resultSigner: signer,
   };
 
   const dir = path.resolve(__dirname, "..", "deployments");
