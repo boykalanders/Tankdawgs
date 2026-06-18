@@ -139,6 +139,33 @@ describe("artillery engine — firing", () => {
     if (!res.endState.gameOver) expect(res.endState.movesLeft).toBe(MOVES_PER_TURN);
   });
 
+  it("assigns teams in 2v2 and ends when one team is wiped", () => {
+    const s = createInitialState({ players: 4, seed: 7, teamSize: 2 });
+    expect(s.teamSize).toBe(2);
+    expect(s.tanks.map((t) => t.team)).toEqual([0, 0, 1, 1]);
+    // Wipe team 1 (seats 2,3); team 0 still has seat 0 alive → game over, team 0.
+    s.tanks[1].alive = false;
+    s.tanks[2].alive = false;
+    s.tanks[3].health = 4;
+    s.tanks[3].x = s.tanks[0].x + 24; // sit the last enemy next to seat 0
+    // Seat 0 fires straight up onto seat 3.
+    const probe = simulateShot(structuredClone(s), { angle: 90, power: 30, weaponId: "bigshot" });
+    const impact = probe.shells.find((sh) => sh.impact)?.impact;
+    s.tanks[3].x = Math.round(impact!.x);
+    const res = simulateShot(s, { angle: 90, power: 30, weaponId: "bigshot" });
+    expect(res.outcome.gameOver).toBe(true);
+    expect(res.outcome.winningTeam).toBe(0);
+  });
+
+  it("a 2v2 is not over while both teams have a survivor", () => {
+    const s = createInitialState({ players: 4, seed: 7, teamSize: 2 });
+    // Kill one tank from each team — both teams still have one alive.
+    s.tanks[1].alive = false;
+    s.tanks[3].alive = false;
+    const res = simulateShot(s, { angle: 90, power: 5, weaponId: "shell" });
+    expect(res.outcome.gameOver).toBe(false);
+  });
+
   it("re-simulates identically on a copy (server/client determinism)", () => {
     const s = init(2);
     const shot: ShotInput = { angle: 55, power: 62, weaponId: "cluster" };

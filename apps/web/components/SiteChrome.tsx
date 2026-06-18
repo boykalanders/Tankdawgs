@@ -14,6 +14,8 @@ function useIsGamePage(): boolean {
 const NAV = [
   { href: "/lobby", label: "Lobby" },
   { href: "/practice", label: "Practice" },
+  { href: "/clans", label: "Clans" },
+  { href: "/events", label: "Events" },
   { href: "/leaderboard", label: "Leaderboard" },
   { href: "/profile", label: "Profile" },
 ];

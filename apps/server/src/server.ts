@@ -4,6 +4,7 @@ import {
   MAX_CHAT_LENGTH,
   maxPlayersFromId,
   type Address,
+  type AuthPayload,
   type ClientToServerEvents,
   type LobbyGame,
   type ServerToClientEvents,
@@ -12,6 +13,7 @@ import { verifyAuth } from "./auth.js";
 import { createChainReader, type ChainReader } from "./chain.js";
 import { startChainListener } from "./chain-events.js";
 import type { ServerConfig } from "./config.js";
+import { EventStore } from "./events-store.js";
 import { LeaderboardStore } from "./leaderboard.js";
 import { LobbyStore } from "./lobby.js";
 import { ProfileStore } from "./profile.js";
@@ -41,6 +43,7 @@ export function createTankDawgsServer(
 ): TankDawgsServer {
   const leaderboard = new LeaderboardStore();
   const profiles = new ProfileStore(config.dataDir);
+  const events = new EventStore(config.dataDir);
 
   // Accept the configured origins PLUS any localhost / 127.0.0.1 origin (any
   // port). This avoids the common local-testing trap where the page is opened
@@ -89,6 +92,13 @@ export function createTankDawgsServer(
     io.to("lobby").emit("lobby:state", { games: withNames(lobby.list()) });
   });
 
+  // Decorate clan events with the host's display name.
+  const withEventNames = () =>
+    events.list().map((e) => ({ ...e, hostName: profiles.getName(e.host) }));
+  events.onChange(() => {
+    io.to("events").emit("events:state", { events: withEventNames() });
+  });
+
   function makeEmitter(gameId: string): RoomEmitter {
     const channel = roomChannel(gameId);
     return {
@@ -98,18 +108,18 @@ export function createTankDawgsServer(
         io.to(channel).emit("game:over", p);
         lobby.markStatus(gameId, "finished");
         const room = rooms.get(gameId);
-        // Record once, on the first (pre-settlement) game:over emit. Skip the
-        // mutual-KO draw (winner is the zero address).
-        const ZERO = "0x0000000000000000000000000000000000000000";
-        if (room && !p.txHash && p.winner !== ZERO) {
-          const losers = room.seats.filter((s) => s !== p.winner.toLowerCase());
-          // Winner takes 80% of the whole pot (stake × players).
+        // Record once, on the first game:over emit. Skip a mutual-KO (no winners).
+        if (room && !p.txHash && p.winners.length > 0) {
+          const winners = p.winners.map((w) => w.toLowerCase() as Address);
+          const losers = room.seats.filter((s) => !winners.includes(s));
+          // The winning team splits 80% of the pot (stake × players) equally.
           const stake = lobby.get(gameId)?.stake ?? room.stakeWei() ?? "0";
-          const winnings = ((BigInt(stake) * BigInt(room.seats.length) * 8000n) / 10000n).toString();
-          leaderboard.record(gameId, p.winner, losers, winnings);
-          // Surface as a claimable win immediately (idempotent with the chain
-          // backfill, which also records it once finishGame mines).
-          leaderboard.recordWonGame(p.winner, gameId, winnings);
+          const pot = BigInt(stake) * BigInt(room.seats.length);
+          const perWinner = ((pot * 8000n) / 10000n / BigInt(winners.length)).toString();
+          leaderboard.record(gameId, winners, losers, perWinner);
+          // Surface as claimable wins immediately (idempotent with the chain
+          // backfill, which also records once the result mines).
+          for (const w of winners) leaderboard.recordWonGame(w, gameId, perWinner);
         }
       },
     };
@@ -306,6 +316,27 @@ export function createTankDawgsServer(
       }
       io.to("lobby").emit("lobby:state", { games: withNames(lobby.list()) });
     });
+
+    // ── clan events / challenges ──
+    socket.on("events:subscribe", () => {
+      void socket.join("events");
+      socket.emit("events:state", { events: withEventNames() });
+    });
+    socket.on("events:unsubscribe", () => void socket.leave("events"));
+
+    const authedEvent = (auth: AuthPayload | undefined, fn: (addr: Address) => void): void => {
+      const address = auth && verifyAuth(auth);
+      if (!address) {
+        socket.emit("server:error", { code: "unauthorized", message: "bad signature" });
+        return;
+      }
+      fn(address);
+    };
+
+    socket.on("events:create", ({ auth, event }) => authedEvent(auth, (addr) => events.create(addr, event)));
+    socket.on("events:rsvp", ({ auth, id }) => authedEvent(auth, (addr) => events.rsvp(id, addr)));
+    socket.on("events:launch", ({ auth, id }) => authedEvent(auth, (addr) => events.launch(id, addr)));
+    socket.on("events:cancel", ({ auth, id }) => authedEvent(auth, (addr) => events.cancel(id, addr)));
 
     socket.on("disconnect", () => {
       const address = socket.data.address;

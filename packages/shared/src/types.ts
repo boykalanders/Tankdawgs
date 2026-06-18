@@ -13,6 +13,8 @@ export interface LobbyGame {
   stake: string;
   /** Seats in this battle (2…8). */
   maxPlayers: number;
+  /** Players per team: 0 = free-for-all; 2/3/4 = 2v2/3v3/4v4. */
+  teamSize: number;
   /** How many seats are filled so far. */
   playerCount: number;
   status: LobbyGameStatus;
@@ -46,9 +48,15 @@ export interface RoomSnapshot {
   messages: ChatMessage[];
   /** Epoch ms when the current player's turn clock expires. */
   clockExpiresAt: number;
-  /** Set when the battle ends. `voucher` is the backend's EIP-712 signature the
-   *  winner submits to claimRewardSigned; `txHash` only on the legacy path. */
-  over: { winner: Address; reason: GameOverReason; txHash?: string; voucher?: string } | null;
+  /** Set when the battle ends. `winners` is the winning team's roster (one
+   *  address in a free-for-all); `vouchers` maps each winner's (lowercased)
+   *  address to the EIP-712 signature they submit to claimRewardSigned. */
+  over: {
+    winners: Address[];
+    reason: GameOverReason;
+    vouchers?: Record<string, string>;
+    txHash?: string;
+  } | null;
 }
 
 /** Broadcast after the server validated and simulated a shot. The full shot
@@ -114,6 +122,37 @@ export interface PlayerProfile {
   /** Games this wallet has won (newest first). */
   wonGames: WonGame[];
 }
+
+/** A scheduled clan activity or inter-clan challenge (off-chain coordination
+ *  layer, referencing the on-chain clans). When the host launches it, a team/FFA
+ *  game code is minted that participants open to play. */
+export interface ClanEvent {
+  id: string;
+  /** "challenge" names an opponent clan; "activity" is open to anyone. */
+  kind: "challenge" | "activity";
+  title: string;
+  host: Address;
+  hostName?: string | null;
+  /** Host's clan tag, decorated at emit time. */
+  hostClanTag?: string | null;
+  /** For a challenge: the opponent clan's tag. */
+  opponentClanTag?: string | null;
+  /** 0 = free-for-all, 2/3/4 = team match (drives the minted code). */
+  teamSize: number;
+  /** Total seats for the match. */
+  maxPlayers: number;
+  /** Per-player stake in $DDawgs (display string), optional. */
+  stake?: string;
+  /** Epoch ms the activity is planned for. */
+  scheduledAt: number;
+  /** Addresses that have RSVP'd. */
+  rsvps: Address[];
+  /** Set once the host launches — the gameId participants open. */
+  gameCode?: string;
+  createdAt: number;
+}
+
+export const MAX_EVENT_TITLE = 60;
 
 /** Per-turn clock, enforced off-chain by the server (never on-chain). Run out of
  *  time on your turn and you forfeit. */

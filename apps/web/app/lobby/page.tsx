@@ -20,7 +20,16 @@ import {
   TANKDAWGS_ADDRESS,
 } from "@/lib/env";
 import { formatStake, shortAddress } from "@/lib/format";
-import { newGameCode, normalizeCode, maxPlayersFromId, MIN_PLAYERS, MAX_PLAYERS } from "@/lib/gamecode";
+import {
+  newGameCode,
+  newTeamGameCode,
+  normalizeCode,
+  maxPlayersFromId,
+  teamSizeFromId,
+  MIN_PLAYERS,
+  MAX_PLAYERS,
+  TEAM_SIZES,
+} from "@/lib/gamecode";
 import { log } from "@/lib/log";
 import { getSocket } from "@/lib/socket";
 
@@ -46,11 +55,20 @@ function Lobby() {
   const { switchChainAsync } = useSwitchChain();
 
   const [games, setGames] = useState<LobbyGame[]>([]);
-  const [maxPlayers, setMaxPlayers] = useState(2);
+  // format: "ffa" + a seat count (2…8), or a team match (teamSize per side).
+  const [format, setFormat] = useState<"ffa" | "team">("ffa");
+  const [ffaSeats, setFfaSeats] = useState(2);
+  const [teamSize, setTeamSize] = useState(2);
   const [stakeInput, setStakeInput] = useState("100");
   const [joinCode, setJoinCode] = useState(search.get("join") ?? "");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const isTeam = format === "team";
+  const maxPlayers = isTeam ? teamSize * 2 : ffaSeats;
+  const teamSizeArg = isTeam ? teamSize : 0;
+  const mintCode = () => (isTeam ? newTeamGameCode(teamSize) : newGameCode(ffaSeats));
+  const formatLabel = isTeam ? `${teamSize}v${teamSize}` : `${maxPlayers}-tank free-for-all`;
 
   // Live browse list over the socket.
   useEffect(() => {
@@ -90,8 +108,8 @@ function Lobby() {
         await switchChainAsync({ chainId: CHAIN_ID });
       }
 
-      // Pick a code free on-chain; the prefix encodes the seat count.
-      let gameId = newGameCode(maxPlayers);
+      // Pick a code free on-chain; the prefix encodes the format (FFA/team).
+      let gameId = mintCode();
       for (let i = 0; i < 5; i++) {
         const g = (await publicClient.readContract({
           address: TANKDAWGS_ADDRESS,
@@ -100,7 +118,7 @@ function Lobby() {
           args: [gameId],
         })) as unknown as readonly [readonly string[], number, ...unknown[]];
         if (Number(g[1]) === 0) break; // maxPlayers 0 → free id
-        gameId = newGameCode(maxPlayers);
+        gameId = mintCode();
       }
 
       const allowance = (await publicClient.readContract({
@@ -119,12 +137,12 @@ function Lobby() {
         });
         await publicClient.waitForTransactionReceipt({ hash: a });
       }
-      log.info("lobby: createGame", gameId, maxPlayers, "stake", stakeInput);
+      log.info("lobby: createGame", gameId, maxPlayers, "teamSize", teamSizeArg, "stake", stakeInput);
       const tx = await writeContractAsync({
         address: TANKDAWGS_ADDRESS,
         abi: TANK_DAWGS_ABI,
         functionName: "createGame",
-        args: [stake, maxPlayers, gameId],
+        args: [stake, maxPlayers, teamSizeArg, gameId],
         chainId: CHAIN_ID,
       });
       await publicClient.waitForTransactionReceipt({ hash: tx });
@@ -138,7 +156,7 @@ function Lobby() {
   }
 
   function createDev() {
-    router.push(`/game/${newGameCode(maxPlayers)}`);
+    router.push(`/game/${mintCode()}`);
   }
 
   function join() {
@@ -189,6 +207,7 @@ function Lobby() {
                   <div className="min-w-0 flex-1">
                     <p className="font-mono font-semibold text-amber-50">{game.gameId}</p>
                     <p className="text-xs text-amber-100/60">
+                      {game.teamSize > 0 ? `${game.teamSize}v${game.teamSize}` : "Free-for-all"} ·{" "}
                       {game.playerCount}/{game.maxPlayers} tanks · {formatStake(game.stake)} ·{" "}
                       {game.creatorName?.trim() || shortAddress(game.creator)}
                       {mine ? " · your battle" : ""}
@@ -209,24 +228,77 @@ function Lobby() {
         <div className="panel panel-gilt p-5">
           <h2 className="heading-display mb-3 text-xl">New battle</h2>
 
-          <label className="mb-1 block text-xs uppercase tracking-widest text-amber-100/60">Players</label>
-          <div className="mb-4 grid grid-cols-4 gap-2">
-            {SEAT_OPTIONS.map((n) => (
-              <button
-                key={n}
-                type="button"
-                onClick={() => setMaxPlayers(n)}
-                aria-pressed={maxPlayers === n}
-                className={`rounded-lg border py-2 text-sm font-semibold transition ${
-                  maxPlayers === n
-                    ? "border-gold bg-gold/15 text-gold-bright"
-                    : "border-gold-dim/40 bg-mahogany-deep text-amber-100/70 hover:border-gold/60"
-                }`}
-              >
-                {n}
-              </button>
-            ))}
+          <label className="mb-1 block text-xs uppercase tracking-widest text-amber-100/60">Format</label>
+          <div className="mb-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setFormat("ffa")}
+              aria-pressed={!isTeam}
+              className={`rounded-lg border py-2 text-sm font-semibold transition ${
+                !isTeam
+                  ? "border-gold bg-gold/15 text-gold-bright"
+                  : "border-gold-dim/40 bg-mahogany-deep text-amber-100/70 hover:border-gold/60"
+              }`}
+            >
+              Free-for-all
+            </button>
+            <button
+              type="button"
+              onClick={() => setFormat("team")}
+              aria-pressed={isTeam}
+              className={`rounded-lg border py-2 text-sm font-semibold transition ${
+                isTeam
+                  ? "border-gold bg-gold/15 text-gold-bright"
+                  : "border-gold-dim/40 bg-mahogany-deep text-amber-100/70 hover:border-gold/60"
+              }`}
+            >
+              Teams
+            </button>
           </div>
+
+          {isTeam ? (
+            <>
+              <label className="mb-1 block text-xs uppercase tracking-widest text-amber-100/60">Team size</label>
+              <div className="mb-4 grid grid-cols-3 gap-2">
+                {TEAM_SIZES.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setTeamSize(s)}
+                    aria-pressed={teamSize === s}
+                    className={`rounded-lg border py-2 text-sm font-semibold transition ${
+                      teamSize === s
+                        ? "border-gold bg-gold/15 text-gold-bright"
+                        : "border-gold-dim/40 bg-mahogany-deep text-amber-100/70 hover:border-gold/60"
+                    }`}
+                  >
+                    {s}v{s}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              <label className="mb-1 block text-xs uppercase tracking-widest text-amber-100/60">Players</label>
+              <div className="mb-4 grid grid-cols-4 gap-2">
+                {SEAT_OPTIONS.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setFfaSeats(n)}
+                    aria-pressed={ffaSeats === n}
+                    className={`rounded-lg border py-2 text-sm font-semibold transition ${
+                      ffaSeats === n
+                        ? "border-gold bg-gold/15 text-gold-bright"
+                        : "border-gold-dim/40 bg-mahogany-deep text-amber-100/70 hover:border-gold/60"
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
 
           {CONTRACTS_CONFIGURED ? (
             <>
@@ -243,8 +315,11 @@ function Lobby() {
                 {busy === "create" ? "Confirm in wallet…" : "Stake & create"}
               </button>
               <p className="mt-3 text-xs text-amber-100/50">
-                Opens a {maxPlayers}-tank battle, escrows your stake, and gives you a code to share.
-                Winner takes 80% of the pot (10% house, 10% burned).
+                Opens a {formatLabel} battle, escrows your stake, and gives you a code to share.
+                {isTeam
+                  ? " The winning team splits 80% of the pot equally"
+                  : " Winner takes 80% of the pot"}{" "}
+                (10% house, 10% burned).
               </p>
             </>
           ) : (
@@ -254,7 +329,7 @@ function Lobby() {
               </button>
               <p className="mt-3 text-xs text-amber-100/50">
                 Contracts aren&rsquo;t configured for this network, so battles run in chain-less dev
-                mode (no stakes). Share the code; the battle starts when {maxPlayers} wallets join.
+                mode (no stakes). Opens a {formatLabel}; the battle starts when {maxPlayers} wallets join.
               </p>
             </>
           )}

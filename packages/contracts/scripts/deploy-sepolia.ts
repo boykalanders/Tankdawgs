@@ -57,6 +57,11 @@ async function main() {
   const signer = process.env.RESULT_SIGNER || deployer.address;
   await (await pool.setResultSigner(signer)).wait();
 
+  // On-chain clan registry (separate proxy).
+  const Clans = await ethers.getContractFactory("TankDawgsClans");
+  const clans = await upgrades.deployProxy(Clans, [], { kind: "transparent" });
+  await clans.waitForDeployment();
+
   // Faucet + demo the grandfather path.
   await (await token.mint(deployer.address, FAUCET)).wait();
   await (await token.mint(CLIENT_WALLET, FAUCET)).wait();
@@ -76,6 +81,7 @@ async function main() {
     companyWallet: company,
     owner: deployer.address,
     resultSigner: signer,
+    tankDawgsClans: await clans.getAddress(),
   };
 
   const dir = path.resolve(__dirname, "..", "deployments");

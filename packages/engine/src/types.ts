@@ -15,6 +15,9 @@ export interface Point {
 export interface Tank {
   /** Seat index — also the player's position in the turn order. */
   seat: number;
+  /** Team index. In free-for-all every tank is its own team (team === seat);
+   *  in team mode teammates share a team. Game ends when one team remains. */
+  team: number;
   /** Column position along the terrain (world x). */
   x: number;
   /** 0–100; at 0 the tank is destroyed. */
@@ -38,6 +41,8 @@ export interface GameState {
   /** Surface Y per column, length === width. */
   terrain: number[];
   tanks: Tank[];
+  /** Players per team (0 = free-for-all; 2/3/4 = 2v2/3v3/4v4). */
+  teamSize: number;
   /** Seat whose turn it is (always an alive tank, unless gameOver). */
   turn: number;
   /** Horizontal wind, −1 (full west) … +1 (full east). Changes each turn. */
@@ -89,7 +94,9 @@ export interface ShotResult {
   shells: Shell[];
   damage: DamageEvent[];
   endState: GameState;
-  outcome: { gameOver: boolean; winner: number | null };
+  /** `winner` is a representative surviving seat; `winningTeam` is the team that
+   *  took the battle (both null on a mutual wipe). */
+  outcome: { gameOver: boolean; winner: number | null; winningTeam: number | null };
 }
 
 /** How a weapon behaves on top of the base ballistics. */

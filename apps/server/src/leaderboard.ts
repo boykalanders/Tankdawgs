@@ -13,15 +13,18 @@ export class LeaderboardStore {
   // derive platform totals (burn = share/8, wagered = share*10/8).
   private totalWonWei = 0n;
 
-  /** Record a finished game: one winner, any number of losers. Idempotent per
-   *  gameId (the live socket path and the chain backfill never double-count). */
-  record(gameId: string, winner: Address, losers: Address[], wonAmountWei: string): void {
+  /** Record a finished game: any number of winners (a team) sharing the prize,
+   *  and any number of losers. `amountPerWinner` is each winner's payout (wei).
+   *  Idempotent per gameId (live socket path + chain backfill never double-count). */
+  record(gameId: string, winners: Address[], losers: Address[], amountPerWinner: string): void {
     if (this.counted.has(gameId)) return;
     this.counted.add(gameId);
-    this.totalWonWei += BigInt(wonAmountWei);
-    const w = this.getOrCreate(winner);
-    w.wins += 1;
-    w.wonAmount = (BigInt(w.wonAmount) + BigInt(wonAmountWei)).toString();
+    for (const winner of winners) {
+      this.totalWonWei += BigInt(amountPerWinner);
+      const w = this.getOrCreate(winner);
+      w.wins += 1;
+      w.wonAmount = (BigInt(w.wonAmount) + BigInt(amountPerWinner)).toString();
+    }
     for (const loser of losers) this.getOrCreate(loser).losses += 1;
   }
 

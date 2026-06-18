@@ -246,14 +246,15 @@ function drawScene(
   for (let x = 0; x < state.terrain.length; x += 3) ctx.lineTo(x, state.terrain[x]);
   ctx.stroke();
 
-  // Tanks.
+  // Tanks. In a team match all teammates share their team's colour.
   for (const tank of state.tanks) {
     const drawX = posOf ? posOf(tank.seat) : tank.x;
     const surfX = Math.min(state.terrain.length - 1, Math.max(0, Math.round(drawX)));
     const ty = state.terrain[surfX];
     const onTurn = !state.gameOver && state.turn === tank.seat;
     const useAim = aim && mySeat === tank.seat ? aim : { angle: tank.angle, power: tank.power };
-    drawTank(ctx, drawX, ty, tank.seat, useAim.angle, tank.alive, tank.health, onTurn, onTurn ? overlay.recoil : 0);
+    const colorIdx = state.teamSize > 0 ? tank.team : tank.seat;
+    drawTank(ctx, drawX, ty, colorIdx, useAim.angle, tank.alive, tank.health, onTurn, onTurn ? overlay.recoil : 0);
     // Wind read-out above the tank whose turn it is.
     if (onTurn && tank.alive) drawWindTag(ctx, drawX, Math.max(16, ty - 66), state.wind);
   }

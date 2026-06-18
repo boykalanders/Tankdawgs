@@ -13,10 +13,11 @@ export const TANK_DAWGS_ABI = [
     outputs: [
       { name: "players", type: "address[]" },
       { name: "maxPlayers", type: "uint8" },
+      { name: "teamSize", type: "uint8" },
       { name: "stake", type: "uint256" },
       { name: "isCompleted", type: "bool" },
       { name: "winner", type: "address" },
-      { name: "rewardClaimed", type: "bool" },
+      { name: "cutsTaken", type: "bool" },
     ],
   },
   {
@@ -118,6 +119,7 @@ export const TANK_DAWGS_ABI = [
     inputs: [
       { name: "stake", type: "uint256" },
       { name: "maxPlayers", type: "uint8" },
+      { name: "teamSize", type: "uint8" },
       { name: "gameId", type: "string" },
     ],
     outputs: [{ type: "string" }],
@@ -137,14 +139,8 @@ export const TANK_DAWGS_ABI = [
     outputs: [],
   },
   {
-    type: "function",
-    name: "claimReward",
-    stateMutability: "nonpayable",
-    inputs: [{ name: "gameId", type: "string" }],
-    outputs: [],
-  },
-  {
     // Winner-driven claim with a backend EIP-712 voucher (no settlement tx).
+    // In a team match each winning member redeems their own voucher.
     type: "function",
     name: "claimRewardSigned",
     stateMutability: "nonpayable",
@@ -174,6 +170,7 @@ export const TANK_DAWGS_ABI = [
       { name: "creator", type: "address", indexed: true },
       { name: "stake", type: "uint256", indexed: false },
       { name: "maxPlayers", type: "uint8", indexed: false },
+      { name: "teamSize", type: "uint8", indexed: false },
     ],
   },
   {
@@ -279,6 +276,87 @@ export const FAUCET_TOKEN_ABI = [
     stateMutability: "view",
     inputs: [{ name: "account", type: "address" }],
     outputs: [{ type: "uint256" }],
+  },
+] as const;
+
+/** TankDawgsClans — on-chain clan registry. */
+export const TANK_DAWGS_CLANS_ABI = [
+  {
+    type: "function",
+    name: "clanOf",
+    stateMutability: "view",
+    inputs: [{ name: "member", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "getClan",
+    stateMutability: "view",
+    inputs: [{ name: "clanId", type: "uint256" }],
+    outputs: [
+      { name: "founder", type: "address" },
+      { name: "name", type: "string" },
+      { name: "tag", type: "string" },
+      { name: "createdAt", type: "uint64" },
+      { name: "memberCount", type: "uint32" },
+    ],
+  },
+  {
+    type: "function",
+    name: "tagTaken",
+    stateMutability: "view",
+    inputs: [{ name: "tag", type: "string" }],
+    outputs: [{ type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "createClan",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "name", type: "string" },
+      { name: "tag", type: "string" },
+    ],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "joinClan",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "clanId", type: "uint256" }],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "leaveClan",
+    stateMutability: "nonpayable",
+    inputs: [],
+    outputs: [],
+  },
+  {
+    type: "event",
+    name: "ClanCreated",
+    inputs: [
+      { name: "clanId", type: "uint256", indexed: true },
+      { name: "founder", type: "address", indexed: true },
+      { name: "name", type: "string", indexed: false },
+      { name: "tag", type: "string", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "MemberJoined",
+    inputs: [
+      { name: "clanId", type: "uint256", indexed: true },
+      { name: "member", type: "address", indexed: true },
+    ],
+  },
+  {
+    type: "event",
+    name: "MemberLeft",
+    inputs: [
+      { name: "clanId", type: "uint256", indexed: true },
+      { name: "member", type: "address", indexed: true },
+    ],
   },
 ] as const;
 

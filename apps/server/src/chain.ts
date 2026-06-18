@@ -5,10 +5,11 @@ import type { ServerConfig } from "./config.js";
 export interface ChainGame {
   players: string[];
   maxPlayers: number;
+  teamSize: number;
   stake: bigint;
   isCompleted: boolean;
   winner: string;
-  rewardClaimed: boolean;
+  cutsTaken: boolean;
 }
 
 export interface ChainReader {
@@ -38,10 +39,11 @@ export function createChainReader(config: ServerConfig): ChainReader {
         return {
           players,
           maxPlayers,
-          stake: (g.stake ?? g[2]) as bigint,
-          isCompleted: (g.isCompleted ?? g[3]) as boolean,
-          winner: (g.winner ?? g[4]) as string,
-          rewardClaimed: (g.rewardClaimed ?? g[5]) as boolean,
+          teamSize: Number(g.teamSize ?? g[2]),
+          stake: (g.stake ?? g[3]) as bigint,
+          isCompleted: (g.isCompleted ?? g[4]) as boolean,
+          winner: (g.winner ?? g[5]) as string,
+          cutsTaken: (g.cutsTaken ?? g[6]) as boolean,
         };
       } catch (e) {
         console.error(

@@ -2,12 +2,24 @@ import type { ShotInput } from "@tankdawgs/engine";
 import type {
   Address,
   ChatMessage,
+  ClanEvent,
   GameOverReason,
   LobbyGame,
   PlayerProfile,
   RoomSnapshot,
   ShotBroadcast,
 } from "./types.js";
+
+/** Payload to schedule a clan activity / challenge. */
+export interface NewEventInput {
+  kind: "challenge" | "activity";
+  title: string;
+  teamSize: number;
+  maxPlayers: number;
+  opponentClanTag?: string;
+  stake?: string;
+  scheduledAt: number;
+}
 
 /** Wallet-signature auth payload. The client signs `loginMessage(address, ts)`
  *  and the server verifies it; valid for AUTH_TTL_MS. */
@@ -51,6 +63,14 @@ export interface ClientToServerEvents {
   "profile:get": (p: { address: Address }) => void;
   /** Set your own display name (authenticated with a wallet signature). */
   "profile:set": (p: { auth: AuthPayload; username: string }) => void;
+  // ── clan events / challenges ──
+  "events:subscribe": () => void;
+  "events:unsubscribe": () => void;
+  "events:create": (p: { auth: AuthPayload; event: NewEventInput }) => void;
+  "events:rsvp": (p: { auth: AuthPayload; id: string }) => void;
+  /** Host mints a game code for the event so participants can play. */
+  "events:launch": (p: { auth: AuthPayload; id: string }) => void;
+  "events:cancel": (p: { auth: AuthPayload; id: string }) => void;
 }
 
 /** Events the server may emit. */
@@ -60,13 +80,15 @@ export interface ServerToClientEvents {
   "game:shot": (p: ShotBroadcast) => void;
   "game:over": (p: {
     gameId: string;
-    winner: Address;
+    /** Winning team's roster (one address in a free-for-all). */
+    winners: Address[];
     reason: GameOverReason;
     txHash?: string;
-    /** Backend voucher the winner redeems via claimRewardSigned. */
-    voucher?: string;
+    /** Per-winner backend vouchers, keyed by lowercased address. */
+    vouchers?: Record<string, string>;
   }) => void;
   "chat:message": (p: ChatMessage) => void;
   "profile:state": (p: PlayerProfile) => void;
+  "events:state": (p: { events: ClanEvent[] }) => void;
   "server:error": (p: ServerError) => void;
 }

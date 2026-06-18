@@ -9,6 +9,7 @@ import {
   type GameState,
   type ShotInput,
 } from "@tankdawgs/engine";
+import { teamSizeFromId } from "@tankdawgs/shared";
 import type {
   Address,
   ChatMessage,
@@ -19,17 +20,15 @@ import type {
 } from "@tankdawgs/shared";
 import type { Relayer } from "./relayer.js";
 
-const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
-
 export interface RoomEmitter {
   broadcastShot(p: ShotBroadcast): void;
   broadcastState(p: RoomSnapshot): void;
   broadcastOver(p: {
     gameId: string;
-    winner: Address;
+    winners: Address[];
     reason: GameOverReason;
     txHash?: string;
-    voucher?: string;
+    vouchers?: Record<string, string>;
   }): void;
 }
 
@@ -67,10 +66,12 @@ export class GameRoom {
   ) {
     this.gameId = gameId;
     this.seats = seats.map((s) => s.toLowerCase() as Address);
-    // Seed terrain from the gameId so the server and every client agree.
+    // Seed terrain from the gameId so the server and every client agree; the
+    // code's prefix also says whether this is a team match (TD<S>V<S>-…).
     this.state = createInitialState({
       players: this.seats.length,
       seed: seedFromString(gameId),
+      teamSize: teamSizeFromId(gameId),
     });
     this.restartClock();
   }
@@ -150,7 +151,7 @@ export class GameRoom {
     });
 
     if (result.outcome.gameOver) {
-      if (result.outcome.winner !== null) void this.settle(result.outcome.winner, "ko");
+      if (result.outcome.winningTeam !== null) void this.settle(result.outcome.winningTeam, "ko");
       else this.settleDraw();
     }
     return { ok: true };
@@ -198,8 +199,8 @@ export class GameRoom {
     this.eliminate(this.state.turn, "timeout");
   }
 
-  private aliveSeats(): number[] {
-    return this.state.tanks.filter((t) => t.alive).map((t) => t.seat);
+  private aliveTeams(): number[] {
+    return [...new Set(this.state.tanks.filter((t) => t.alive).map((t) => t.team))];
   }
 
   private nextAliveSeat(from: number): number {
@@ -223,10 +224,9 @@ export class GameRoom {
     );
     this.state = { ...this.state, tanks };
 
-    const alive = this.aliveSeats();
-    if (alive.length <= 1) {
-      const winnerSeat = alive.length === 1 ? alive[0] : null;
-      if (winnerSeat !== null) void this.settle(winnerSeat, reason);
+    const teams = this.aliveTeams();
+    if (teams.length <= 1) {
+      if (teams.length === 1) void this.settle(teams[0], reason);
       else this.settleDraw();
       return;
     }
@@ -238,33 +238,40 @@ export class GameRoom {
     this.emitter.broadcastState(this.snapshot());
   }
 
-  private async settle(winnerSeat: number, reason: GameOverReason): Promise<void> {
+  /** Settle for the winning TEAM: sign a voucher for every member of that team
+   *  (in a free-for-all the "team" is the single survivor). Each member redeems
+   *  their own voucher for an equal share of the pot. */
+  private async settle(winningTeam: number, reason: GameOverReason): Promise<void> {
     if (this.over || this.settling) return;
     this.settling = true;
     this.stopClock();
 
-    const winner = this.seats[winnerSeat];
-    this.state = { ...this.state, gameOver: true, winner: winnerSeat };
+    const winnerSeats = this.state.tanks.filter((t) => t.team === winningTeam).map((t) => t.seat);
+    const winners = winnerSeats.map((s) => this.seats[s]);
+    this.state = { ...this.state, gameOver: true, winner: winnerSeats[0] };
 
-    let voucher: string | undefined;
-    try {
-      voucher = (await this.relayer.signResult(this.gameId, winner)) ?? undefined;
-    } catch {
-      /* logged by the relayer */
+    const vouchers: Record<string, string> = {};
+    for (const addr of winners) {
+      try {
+        const sig = await this.relayer.signResult(this.gameId, addr);
+        if (sig) vouchers[addr.toLowerCase()] = sig;
+      } catch {
+        /* logged by the relayer */
+      }
     }
-    this.over = { winner, reason, voucher };
-    this.emitter.broadcastOver({ gameId: this.gameId, winner, reason, voucher });
+    this.over = { winners, reason, vouchers };
+    this.emitter.broadcastOver({ gameId: this.gameId, winners, reason, vouchers });
     this.emitter.broadcastState(this.snapshot());
     this.settling = false;
   }
 
-  /** Mutual KO (all remaining tanks destroyed by one blast): no winner, no
-   *  payout voucher. Stakes stay escrowed for an owner-driven refund. */
+  /** Mutual KO (all remaining tanks destroyed at once): no winner, no payout
+   *  voucher. Stakes stay escrowed for an owner-driven refund. */
   private settleDraw(): void {
     if (this.over) return;
     this.stopClock();
-    this.over = { winner: ZERO_ADDRESS, reason: "ko" };
-    this.emitter.broadcastOver({ gameId: this.gameId, winner: ZERO_ADDRESS, reason: "ko" });
+    this.over = { winners: [], reason: "ko" };
+    this.emitter.broadcastOver({ gameId: this.gameId, winners: [], reason: "ko" });
     this.emitter.broadcastState(this.snapshot());
   }
 

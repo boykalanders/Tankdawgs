@@ -40,12 +40,19 @@ export function startChainListener(
 
   async function scan(from: number, to: number): Promise<void> {
     for (const ev of await contract.queryFilter(contract.filters.GameCreated(), from, to)) {
-      const a = argsOf<{ gameId: string; creator: string; stake: bigint; maxPlayers: bigint }>(ev);
+      const a = argsOf<{
+        gameId: string;
+        creator: string;
+        stake: bigint;
+        maxPlayers: bigint;
+        teamSize: bigint;
+      }>(ev);
       lobby.upsertCreated(
         a.gameId,
         a.creator.toLowerCase() as Address,
         a.stake.toString(),
         Number(a.maxPlayers),
+        Number(a.teamSize),
         Date.now()
       );
     }
@@ -64,7 +71,7 @@ export function startChainListener(
       // Feed the win leaderboard from chain history too, so wins survive server
       // restarts. record() is idempotent per gameId, so this never double-counts
       // with the live socket path (which also supplies the full loser roster).
-      leaderboard.record(a.gameId, winner, [], a.reward.toString());
+      leaderboard.record(a.gameId, [winner], [], a.reward.toString());
     }
     for (const ev of await contract.queryFilter(contract.filters.GameCancelled(), from, to)) {
       lobby.markStatus(argsOf<{ gameId: string }>(ev).gameId, "cancelled");

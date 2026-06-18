@@ -1,9 +1,11 @@
 // Short, human-shareable game codes — these ARE the on-chain gameId string.
-// ChessDawgs-style: create → get a code → opponents join with it.
 //
-// The code embeds the seat count: "TD<N>-XXXXX" (N = 2…8). The web mints the
-// code, the contract stores it verbatim, and the server/clients read N back to
-// build the right N-tank battlefield (and seed the terrain from the gameId).
+// The code embeds the format:
+//   • Free-for-all:  "TD<N>-XXXXX"      (N = 2…8 players)
+//   • Team match:    "TD<S>V<S>-XXXXX"  (S = 2/3/4 → 2v2 / 3v3 / 4v4)
+// The web mints the code, the contract stores it verbatim, and the
+// server/clients read the format back to build the right battlefield (and seed
+// the terrain from the gameId).
 
 // Ambiguous characters (I, L, O, 0, 1) are excluded so codes read aloud / type
 // cleanly.
@@ -11,15 +13,14 @@ const ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 
 export const MIN_PLAYERS = 2;
 export const MAX_PLAYERS = 8;
+/** Allowed team sizes (2v2 / 3v3 / 4v4). */
+export const TEAM_SIZES = [2, 3, 4] as const;
 
-function clampPlayers(n: number): number {
-  if (!Number.isFinite(n)) return MIN_PLAYERS;
-  return Math.max(MIN_PLAYERS, Math.min(MAX_PLAYERS, Math.round(n)));
+function clamp(n: number, lo: number, hi: number): number {
+  if (!Number.isFinite(n)) return lo;
+  return Math.max(lo, Math.min(hi, Math.round(n)));
 }
 
-// Web Crypto is a global in both the browser and Node 18+, but the shared
-// package compiles with lib: ["ES2022"] (no DOM), so reach it through a
-// structurally-typed globalThis instead of the ambient `crypto` name.
 function randomBytes(n: number): Uint8Array {
   const bytes = new Uint8Array(n);
   const webcrypto = (globalThis as {
@@ -30,17 +31,35 @@ function randomBytes(n: number): Uint8Array {
   return bytes;
 }
 
-/** Mint a fresh code for an N-player battle, e.g. newGameCode(4) → "TD4-9PQ4K". */
-export function newGameCode(maxPlayers = MIN_PLAYERS): string {
+function body(): string {
   let s = "";
   for (const b of randomBytes(5)) s += ALPHABET[b % ALPHABET.length];
-  return `TD${clampPlayers(maxPlayers)}-${s}`;
+  return s;
 }
 
-/** Seat count encoded in a gameId (defaults to 2 for legacy/odd codes). */
+/** Mint a free-for-all code for `maxPlayers` players, e.g. "TD4-9PQ4K". */
+export function newGameCode(maxPlayers = MIN_PLAYERS): string {
+  return `TD${clamp(maxPlayers, MIN_PLAYERS, MAX_PLAYERS)}-${body()}`;
+}
+
+/** Mint a team-match code for `teamSize` per side, e.g. "TD2V2-9PQ4K". */
+export function newTeamGameCode(teamSize: number): string {
+  const s = clamp(teamSize, 2, 4);
+  return `TD${s}V${s}-${body()}`;
+}
+
+/** Players per team encoded in a gameId (0 = free-for-all). */
+export function teamSizeFromId(gameId: string): number {
+  const m = gameId.trim().toUpperCase().match(/^TD(\d)V(\d)-/);
+  return m ? clamp(Number(m[1]), 2, 4) : 0;
+}
+
+/** Total seats encoded in a gameId (team code → 2×teamSize; FFA → N). */
 export function maxPlayersFromId(gameId: string): number {
+  const team = teamSizeFromId(gameId);
+  if (team) return team * 2;
   const m = gameId.trim().toUpperCase().match(/^TD(\d)-/);
-  return m ? clampPlayers(Number(m[1])) : MIN_PLAYERS;
+  return m ? clamp(Number(m[1]), MIN_PLAYERS, MAX_PLAYERS) : MIN_PLAYERS;
 }
 
 /** Accept a raw code, a prefixed code, or a pasted invite link → canonical code. */
@@ -50,9 +69,7 @@ export function normalizeCode(input: string): string {
   if (fromLink) t = decodeURIComponent(fromLink[1]);
   t = t.toUpperCase().replace(/\s+/g, "");
   if (!t) return "";
-  // Already a TD<N>- code → keep it.
-  if (/^TD\d-/.test(t)) return t;
-  // Bare body or stray prefix → assume a 2-player code.
-  const body = t.includes("-") ? t.split("-").slice(1).join("-") : t;
-  return `TD${MIN_PLAYERS}-${body}`;
+  if (/^TD\dV\d-/.test(t) || /^TD\d-/.test(t)) return t; // already canonical
+  const rest = t.includes("-") ? t.split("-").slice(1).join("-") : t;
+  return `TD${MIN_PLAYERS}-${rest}`;
 }

@@ -42,10 +42,13 @@ contract TankDawgs is
     struct Game {
         address[] players;
         uint8 maxPlayers;
+        /// @notice Players per team: 0 = free-for-all; 2/3/4 = 2v2/3v3/4v4
+        ///         (exactly two teams, so maxPlayers == 2 * teamSize).
+        uint8 teamSize;
         uint256 stake; // per-player stake
         bool isCompleted;
-        address winner;
-        bool rewardClaimed;
+        address winner; // representative (first claimer) — informational
+        bool cutsTaken; // company + burn taken once
     }
 
     /// @notice Grace window (template value: 1 hour) — after it, an unclaimed
@@ -70,6 +73,10 @@ contract TankDawgs is
     mapping(string => mapping(address => bool)) public playerJoined;
     mapping(string => mapping(address => bool)) public playerPaid;
     mapping(string => uint256) private completedAt;
+    /// @notice Total wei paid out for a game (cuts + member shares) — lets
+    ///         ownerWithdrawUnpaid sweep exactly what's left after partial
+    ///         team claims.
+    mapping(string => uint256) private paidOut;
 
     /// @notice Low-privilege relayer key allowed to settle games (finishGame).
     ///         It can record outcomes but CANNOT move funds, change wallets/gate,
@@ -84,7 +91,7 @@ contract TankDawgs is
     bytes32 private constant RESULT_TYPEHASH =
         keccak256("Result(string gameId,address winner)");
 
-    event GameCreated(string gameId, address indexed creator, uint256 stake, uint8 maxPlayers);
+    event GameCreated(string gameId, address indexed creator, uint256 stake, uint8 maxPlayers, uint8 teamSize);
     event GameJoined(string gameId, address indexed player, uint8 seat);
     event GameFinished(string gameId, address winner, uint256 reward);
     event GameCancelled(string gameId, uint256 refundedPlayers);
@@ -147,14 +154,15 @@ contract TankDawgs is
         returns (
             address[] memory players,
             uint8 maxPlayers,
+            uint8 teamSize,
             uint256 stake,
             bool isCompleted,
             address winner,
-            bool rewardClaimed
+            bool cutsTaken
         )
     {
         Game storage g = _games[gameId];
-        return (g.players, g.maxPlayers, g.stake, g.isCompleted, g.winner, g.rewardClaimed);
+        return (g.players, g.maxPlayers, g.teamSize, g.stake, g.isCompleted, g.winner, g.cutsTaken);
     }
 
     function playersOf(string memory gameId) external view returns (address[] memory) {
@@ -179,9 +187,11 @@ contract TankDawgs is
 
     // ─────────────────────────── game lifecycle ───────────────────────────
 
-    /// @notice Open a table for `maxPlayers` (2…8) at `stake` each. The creator
-    ///         takes seat 0 and escrows the first stake.
-    function createGame(uint256 stake, uint8 maxPlayers, string memory gameId)
+    /// @notice Open a table at `stake` each. `teamSize` 0 = free-for-all of
+    ///         `maxPlayers` (2…8); `teamSize` 2/3/4 = a 2v2/3v3/4v4 (exactly two
+    ///         teams, so maxPlayers must equal 2 × teamSize). The creator takes
+    ///         seat 0 and escrows the first stake.
+    function createGame(uint256 stake, uint8 maxPlayers, uint8 teamSize, string memory gameId)
         external
         whenNotPaused
         nonReentrant
@@ -191,16 +201,21 @@ contract TankDawgs is
         require(_games[gameId].maxPlayers == 0, "gameId taken");
         require(stake > 0, "zero stake");
         require(maxPlayers >= 2 && maxPlayers <= MAX_PLAYERS, "bad maxPlayers");
+        require(
+            teamSize == 0 || (teamSize >= 2 && uint256(teamSize) * 2 == maxPlayers),
+            "bad teamSize"
+        );
         require(ownsNFT(msg.sender), "must own a Dawgs NFT");
 
         Game storage g = _games[gameId];
         g.maxPlayers = maxPlayers;
+        g.teamSize = teamSize;
         g.stake = stake;
         g.players.push(msg.sender);
         playerJoined[gameId][msg.sender] = true;
 
         rewardToken.safeTransferFrom(msg.sender, address(this), stake);
-        emit GameCreated(gameId, msg.sender, stake, maxPlayers);
+        emit GameCreated(gameId, msg.sender, stake, maxPlayers, teamSize);
         emit GameJoined(gameId, msg.sender, 0);
         return gameId;
     }
@@ -242,8 +257,10 @@ contract TankDawgs is
         emit GameCancelled(gameId, roster.length);
     }
 
-    /// @notice Backend authority reports the winner (backstop to the voucher
-    ///         path). Covers KO wins, resignations, and turn-clock forfeits.
+    /// @notice Backend authority records the winning team's representative
+    ///         (backstop to the voucher path). The actual payout is per-member
+    ///         via claimRewardSigned. Marks the game completed so the claim
+    ///         window/timeout starts.
     function finishGame(string memory gameId, address winner) external onlyRelayer {
         Game storage g = _games[gameId];
         require(isActive(gameId), "game not active");
@@ -253,20 +270,22 @@ contract TankDawgs is
         g.winner = winner;
         completedAt[gameId] = block.timestamp;
 
-        emit GameFinished(gameId, winner, _winnerShare(g.stake, g.players.length));
+        emit GameFinished(gameId, winner, _memberShare(g));
     }
 
-    /// @notice Winner-driven claim with a backend voucher. The backend signs an
-    ///         EIP-712 Result(gameId, winner) off-chain (no transaction); the
-    ///         winner submits it here, the contract validates recovered signer ==
-    ///         resultSigner, then settles + pays out in one winner-paid tx.
+    /// @notice A winning player redeems a backend voucher to pull THEIR share.
+    ///         The backend signs Result(gameId, member) only for members of the
+    ///         winning team, so a valid voucher proves the caller won. Free-for-
+    ///         all → one winner takes 80%; a team match → each member of the
+    ///         winning team takes an equal slice of the 80%. Company + burn cuts
+    ///         are taken once, on the first claim.
     function claimRewardSigned(string memory gameId, bytes calldata signature)
         external
         nonReentrant
     {
         Game storage g = _games[gameId];
-        require(isActive(gameId), "game not active");
-        require(!g.rewardClaimed, "already claimed");
+        require(g.maxPlayers != 0 && g.players.length == g.maxPlayers, "game not active");
+        require(!playerPaid[gameId][msg.sender], "already claimed");
         require(_isPlayer(g, msg.sender), "not a player");
         require(resultSigner != address(0), "signer unset");
 
@@ -275,32 +294,19 @@ contract TankDawgs is
         );
         require(ECDSA.recover(digest, signature) == resultSigner, "bad voucher");
 
-        g.isCompleted = true;
-        g.winner = msg.sender;
-        g.rewardClaimed = true;
-        completedAt[gameId] = block.timestamp;
         playerPaid[gameId][msg.sender] = true;
+        _settleCutsOnce(gameId, g, msg.sender);
 
-        _payout(g, msg.sender);
-        emit GameFinished(gameId, msg.sender, _winnerShare(g.stake, g.players.length));
-    }
-
-    /// @notice Winner pulls the pot after finishGame settled it (backstop path).
-    function claimReward(string memory gameId) external nonReentrant {
-        Game storage g = _games[gameId];
-        require(g.isCompleted, "no win to claim");
-        require(msg.sender == g.winner, "not the winner");
-        require(!g.rewardClaimed, "already claimed");
-
-        g.rewardClaimed = true;
-        playerPaid[gameId][msg.sender] = true;
-        _payout(g, msg.sender);
+        uint256 share = _memberShare(g);
+        paidOut[gameId] += share;
+        rewardToken.safeTransfer(msg.sender, share);
+        emit GameFinished(gameId, msg.sender, share);
     }
 
     // ─────────────────────────── safety nets / admin ───────────────────────────
 
-    /// @notice If the winner never claims (e.g. UI bug), the owner can sweep the
-    ///         whole pot to the company wallet after the timeout.
+    /// @notice After the timeout, the owner sweeps whatever is left unclaimed for
+    ///         a settled game (handles partial team claims) to the company wallet.
     function ownerWithdrawUnpaid(string memory gameId)
         external
         onlyOwner
@@ -308,16 +314,16 @@ contract TankDawgs is
     {
         Game storage g = _games[gameId];
         require(g.isCompleted, "game not completed");
-        require(!g.rewardClaimed, "already paid");
         require(
             block.timestamp > completedAt[gameId] + ABANDONMENT_TIMEOUT,
             "claim window open"
         );
-
-        g.rewardClaimed = true;
         uint256 pot = g.stake * g.players.length;
-        rewardToken.safeTransfer(companyWallet, pot);
-        emit GameFinished(gameId, companyWallet, pot);
+        uint256 remaining = pot - paidOut[gameId];
+        require(remaining > 0, "nothing left");
+        paidOut[gameId] = pot;
+        rewardToken.safeTransfer(companyWallet, remaining);
+        emit GameFinished(gameId, companyWallet, remaining);
     }
 
     function setCompanyWallet(address _companyWallet) external onlyOwner {
@@ -367,17 +373,35 @@ contract TankDawgs is
 
     // ─────────────────────────── internals ───────────────────────────
 
-    /// @notice Pay the 80/10/10 split of the full pot to winner/company/burn.
-    function _payout(Game storage g, address winner) private {
+    /// @notice Number of winners that share the 80%: one in free-for-all, the
+    ///         whole team in a team match.
+    function _winnerCount(Game storage g) private view returns (uint256) {
+        return g.teamSize >= 2 ? g.teamSize : 1;
+    }
+
+    /// @notice One winner's slice of the pot (80% split across the winners).
+    function _memberShare(Game storage g) private view returns (uint256) {
         uint256 pot = g.stake * g.players.length;
-        rewardToken.safeTransfer(winner, (pot * WINNER_PERCENT) / 100);
-        rewardToken.safeTransfer(companyWallet, (pot * COMPANY_PERCENT) / 100);
-        rewardToken.safeTransfer(poolAddress, (pot * BURN_PERCENT) / 100);
+        return (pot * WINNER_PERCENT) / 100 / _winnerCount(g);
     }
 
-    function _winnerShare(uint256 stake, uint256 nPlayers) private pure returns (uint256) {
-        return (stake * nPlayers * WINNER_PERCENT) / 100;
+    /// @notice On the first claim, mark the game completed and take the 10%
+    ///         company + 10% burn cuts (once).
+    function _settleCutsOnce(string memory gameId, Game storage g, address representative) private {
+        if (g.cutsTaken) return;
+        g.cutsTaken = true;
+        if (!g.isCompleted) {
+            g.isCompleted = true;
+            g.winner = representative;
+            completedAt[gameId] = block.timestamp;
+        }
+        uint256 pot = g.stake * g.players.length;
+        uint256 company = (pot * COMPANY_PERCENT) / 100;
+        uint256 burn = (pot * BURN_PERCENT) / 100;
+        paidOut[gameId] += company + burn;
+        rewardToken.safeTransfer(companyWallet, company);
+        rewardToken.safeTransfer(poolAddress, burn);
     }
 
-    uint256[39] private __gap;
+    uint256[38] private __gap;
 }

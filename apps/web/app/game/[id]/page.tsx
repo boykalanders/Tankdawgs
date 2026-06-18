@@ -44,8 +44,8 @@ export default function GamePage() {
 
 type Phase = "loading" | "notfound" | "waiting" | "invite" | "full" | "over" | "play";
 
-/** Decoded getGame tuple: [players[], maxPlayers, stake, isCompleted, winner, rewardClaimed]. */
-type ChainGame = readonly [readonly string[], number, bigint, boolean, string, boolean];
+/** getGame tuple: [players[], maxPlayers, teamSize, stake, isCompleted, winner, cutsTaken]. */
+type ChainGame = readonly [readonly string[], number, number, bigint, boolean, string, boolean];
 
 const REASON_WORD: Record<GameOverReason, string> = {
   ko: "last tank standing",
@@ -96,31 +96,39 @@ function GameRoom() {
     query: { enabled: Boolean(CONTRACTS_CONFIGURED && gameId), refetchInterval: 4000 },
   });
 
+  // Has THIS wallet already pulled its share? (per-member in team games)
+  const { data: myPaid, refetch: refetchPaid } = useReadContract({
+    address: TANKDAWGS_ADDRESS ?? undefined,
+    abi: TANK_DAWGS_ABI,
+    functionName: "playerPaid",
+    args: address ? [gameId, address] : undefined,
+    chainId: CHAIN_ID,
+    query: { enabled: Boolean(CONTRACTS_CONFIGURED && address) },
+  });
+
   const me = address?.toLowerCase();
   let phase: Phase = "play";
   let onchainStake: bigint | null = null;
-  let onchainWinner: string | null = null;
+  let amPlayer = false;
 
   if (CONTRACTS_CONFIGURED) {
     if (!chainGame) {
       phase = "loading";
     } else {
-      const [players, max, stake, completed, winner] = chainGame as ChainGame;
+      const [players, max, , stake, completed] = chainGame as ChainGame;
       onchainStake = stake;
-      onchainWinner = winner;
       const roster = players.map((p) => p.toLowerCase());
       const full = roster.length >= max;
-      const amIn = !!me && roster.includes(me);
+      amPlayer = !!me && roster.includes(me);
       if (max === 0) phase = "notfound";
       else if (completed) phase = "over";
-      else if (amIn) phase = full ? "play" : "waiting";
+      else if (amPlayer) phase = full ? "play" : "waiting";
       else phase = full ? "full" : "invite";
     }
   }
   const effectivePhase: Phase = snapshot ? "play" : phase;
 
-  const cg = CONTRACTS_CONFIGURED && chainGame ? (chainGame as ChainGame) : null;
-  const rewardClaimed = claimed || (cg ? cg[5] : false);
+  const myClaimed = claimed || myPaid === true;
 
   const mySeat: number | null = (() => {
     if (!snapshot || !address) return null;
@@ -171,14 +179,16 @@ function GameRoom() {
     };
     const onOver = (p: {
       gameId: string;
-      winner: Address;
+      winners: Address[];
       reason: GameOverReason;
       txHash?: string;
-      voucher?: string;
+      vouchers?: Record<string, string>;
     }) => {
       if (p.gameId !== gameId) return;
       setSnapshot((s) =>
-        s ? { ...s, over: { winner: p.winner, reason: p.reason, txHash: p.txHash, voucher: p.voucher } } : s
+        s
+          ? { ...s, over: { winners: p.winners, reason: p.reason, txHash: p.txHash, vouchers: p.vouchers } }
+          : s
       );
     };
     const onChat = (m: ChatMessage) => {
@@ -276,15 +286,16 @@ function GameRoom() {
   }
 
   async function claim() {
-    if (!TANKDAWGS_ADDRESS) return;
-    const voucher = snapshot?.over?.voucher;
+    if (!TANKDAWGS_ADDRESS || !address) return;
+    const voucher = snapshot?.over?.vouchers?.[address.toLowerCase()];
     if (!voucher) {
-      setActionError("Reward voucher isn't ready yet — you can also claim from your Profile.");
+      setActionError("Your reward voucher isn't ready yet — you can also claim from your Profile.");
       return;
     }
     setActionError(null);
     setWorking("claim");
     try {
+      if (connectedChain !== CHAIN_ID) await switchChainAsync({ chainId: CHAIN_ID });
       const tx = await writeContractAsync({
         address: TANKDAWGS_ADDRESS,
         abi: TANK_DAWGS_ABI,
@@ -294,7 +305,7 @@ function GameRoom() {
       });
       if (publicClient) await publicClient.waitForTransactionReceipt({ hash: tx });
       setClaimed(true);
-      await refetchGame();
+      await Promise.all([refetchGame(), refetchPaid()]);
     } catch (e) {
       const msg = e instanceof Error ? e.message.split("\n")[0] : "Claim failed";
       setActionError(/already claimed/i.test(msg) ? "Reward already claimed." : msg);
@@ -390,17 +401,16 @@ function GameRoom() {
         </Card>
       );
     if (effectivePhase === "over") {
-      const iWon = !!me && onchainWinner && onchainWinner.toLowerCase() === me;
       return (
         <Card>
           <div className="text-4xl">🏆</div>
-          <h2 className="heading-display text-2xl">{iWon ? "You won this one" : "Battle over"}</h2>
-          {iWon && !rewardClaimed && (
+          <h2 className="heading-display text-2xl">Battle over</h2>
+          {amPlayer && !myClaimed && (
             <button className="btn-gold w-full" onClick={() => router.push("/profile")}>
-              Claim 80% of the pot
+              Claim your share from Profile
             </button>
           )}
-          {rewardClaimed && <p className="text-gold-bright">Reward claimed ✓</p>}
+          {myClaimed && <p className="text-gold-bright">Reward claimed ✓</p>}
           <Back />
         </Card>
       );
@@ -422,7 +432,9 @@ function GameRoom() {
   const over = snapshot.over;
   const myTurn =
     mySeat !== null && !renderState.gameOver && renderState.turn === mySeat && !over && !anim;
-  const iWon = over && address && over.winner.toLowerCase() === address.toLowerCase();
+  const iWon =
+    !!over && !!address && over.winners.some((w) => w.toLowerCase() === address.toLowerCase());
+  const isDraw = !!over && over.winners.length === 0;
 
   const shellPlayers: ShellPlayer[] = snapshot.players.map((p) => {
     const isMe = address && p.address.toLowerCase() === address.toLowerCase();
@@ -438,10 +450,13 @@ function GameRoom() {
     };
   });
 
+  const winnerLabel = over && over.winners.length > 0
+    ? `${shortAddress(over.winners[0])}${over.winners.length > 1 ? " + team" : ""}`
+    : "Nobody";
   const statusText = over
-    ? over.winner === "0x0000000000000000000000000000000000000000"
+    ? isDraw
       ? "Mutual destruction — draw"
-      : `${shortAddress(over.winner)} wins by ${REASON_WORD[over.reason]}`
+      : `${winnerLabel} wins by ${REASON_WORD[over.reason]}`
     : anim
       ? "Shell away…"
       : myTurn
@@ -451,7 +466,10 @@ function GameRoom() {
           : "Hold position…";
 
   const stake = snapshot.stake ? BigInt(snapshot.stake) : null;
-  const potWin = stake ? formatStake((stake * BigInt(snapshot.players.length) * 8000n) / 10000n) : null;
+  const winnersCount = renderState.teamSize > 0 ? renderState.teamSize : 1;
+  const myShare =
+    stake ? formatStake((stake * BigInt(snapshot.players.length) * 8000n) / 10000n / BigInt(winnersCount)) : null;
+  const myVoucher = over && address ? over.vouchers?.[address.toLowerCase()] : undefined;
 
   return (
     <GameShell
@@ -490,20 +508,24 @@ function GameRoom() {
           iWon ? (
             <WinnerPopup
               winnerName="You"
-              message={`Won by ${REASON_WORD[over.reason]}`}
-              amountLabel={potWin ? `+${potWin}` : null}
+              message={
+                renderState.teamSize > 0
+                  ? `Your team won by ${REASON_WORD[over.reason]}`
+                  : `Won by ${REASON_WORD[over.reason]}`
+              }
+              amountLabel={myShare ? `+${myShare}` : null}
               actions={
                 <>
                   {CONTRACTS_CONFIGURED &&
-                    !rewardClaimed &&
-                    (over.voucher ? (
+                    !myClaimed &&
+                    (myVoucher ? (
                       <button className="btn-gold" disabled={working === "claim"} onClick={claim}>
-                        {working === "claim" ? "Claiming…" : "Claim 80% of the pot"}
+                        {working === "claim" ? "Claiming…" : "Claim your share"}
                       </button>
                     ) : (
                       <span className="self-center text-[11px] text-amber-100/60">Preparing voucher…</span>
                     ))}
-                  {rewardClaimed && <span className="self-center text-gold-bright">Reward claimed ✓</span>}
+                  {myClaimed && <span className="self-center text-gold-bright">Reward claimed ✓</span>}
                   {actionError && <span className="self-center text-sm text-red-300">{actionError}</span>}
                   <button className="btn-outline" onClick={() => router.push("/lobby")}>
                     Back to lobby
@@ -514,8 +536,8 @@ function GameRoom() {
           ) : (
             <WinnerPopup
               defeated
-              winnerName={over.winner === "0x0000000000000000000000000000000000000000" ? "Nobody" : shortAddress(over.winner)}
-              message={`Won by ${REASON_WORD[over.reason]}`}
+              winnerName={winnerLabel}
+              message={isDraw ? "Mutual destruction" : `Won by ${REASON_WORD[over.reason]}`}
               amountLabel={stake ? `−${formatStake(stake)}` : null}
               actions={
                 <button className="btn-outline" onClick={() => router.push("/lobby")}>

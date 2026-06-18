@@ -25,8 +25,6 @@ export default function ProfilePage() {
   );
 }
 
-/** getGame tuple: [players[], maxPlayers, stake, isCompleted, winner, rewardClaimed]. */
-type ChainGame = readonly [readonly string[], number, bigint, boolean, string, boolean];
 
 
 function Profile() {
@@ -74,13 +72,14 @@ function Profile() {
       const open: WonGame[] = [];
       for (const g of wonGames) {
         try {
-          const game = (await publicClient.readContract({
+          // Per-member: has THIS wallet already pulled its share of this game?
+          const paid = (await publicClient.readContract({
             address: TANKDAWGS_ADDRESS,
             abi: TANK_DAWGS_ABI,
-            functionName: "getGame",
-            args: [g.gameId],
-          })) as unknown as ChainGame;
-          if (game[5]) continue; // rewardClaimed — already paid out
+            functionName: "playerPaid",
+            args: [g.gameId, address],
+          })) as boolean;
+          if (paid) continue; // already paid out
           open.push(g); // claimable now if it carries a voucher
         } catch (e) {
           log.info("profile: reward check skipped for", g.gameId, e instanceof Error ? e.message : e);

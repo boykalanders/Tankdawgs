@@ -5,6 +5,7 @@ export {
   WORLD_HEIGHT,
   MOVES_PER_TURN,
   createInitialState,
+  teamOf,
   driveTank,
   validateShot,
   simulateShot,

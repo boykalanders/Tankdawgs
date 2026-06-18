@@ -162,6 +162,7 @@ export default function GameShell({
                 health={state.tanks[p.seat]?.health ?? 0}
                 alive={state.tanks[p.seat]?.alive ?? false}
                 isTurn={!state.gameOver && state.turn === p.seat}
+                colorIndex={state.teamSize > 0 ? state.tanks[p.seat]?.team ?? p.seat : p.seat}
               />
             ))}
           </div>
@@ -187,6 +188,7 @@ export default function GameShell({
                 health={state.tanks[p.seat]?.health ?? 0}
                 alive={state.tanks[p.seat]?.alive ?? false}
                 isTurn={!state.gameOver && state.turn === p.seat}
+                colorIndex={state.teamSize > 0 ? state.tanks[p.seat]?.team ?? p.seat : p.seat}
               />
             ))}
           </div>

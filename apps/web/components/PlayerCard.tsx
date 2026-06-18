@@ -15,11 +15,13 @@ interface PlayerCardProps {
   health: number;
   alive: boolean;
   isTurn: boolean;
+  /** Which palette colour to use (team index in team mode, else seat). */
+  colorIndex?: number;
 }
 
-/** Compact roster card: avatar, name, seat colour, a health bar and a turn glow. */
-export default function PlayerCard({ player, health, alive, isTurn }: PlayerCardProps) {
-  const color = seatColor(player.seat);
+/** Compact roster card: avatar, name, side colour, a health bar and a turn glow. */
+export default function PlayerCard({ player, health, alive, isTurn, colorIndex }: PlayerCardProps) {
+  const color = seatColor(colorIndex ?? player.seat);
   return (
     <div
       className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 transition ${

@@ -145,7 +145,7 @@ describe("TankDawgs server (dev mode)", () => {
     a.emit("game:resign", { gameId: "9" });
     const over = await overPromise;
     expect(over.reason).toBe("resign");
-    expect(over.winner).toBe(walletB.address.toLowerCase());
+    expect(over.winners).toEqual([walletB.address.toLowerCase()]);
   });
 
   it("turn-clock expiry forfeits the player on turn", async () => {
@@ -153,7 +153,7 @@ describe("TankDawgs server (dev mode)", () => {
     const { b } = await joinBoth(port, "10");
     const over = await waitFor(b, "game:over");
     expect(over.reason).toBe("timeout");
-    expect(over.winner).toBe(walletB.address.toLowerCase());
+    expect(over.winners).toEqual([walletB.address.toLowerCase()]);
   });
 
   it("relays chat between players", async () => {

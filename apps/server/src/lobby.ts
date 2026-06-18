@@ -13,6 +13,7 @@ export class LobbyStore {
     creator: Address,
     stake: string,
     maxPlayers: number,
+    teamSize: number,
     createdAt: number
   ): void {
     this.games.set(gameId, {
@@ -20,6 +21,7 @@ export class LobbyStore {
       creator,
       stake,
       maxPlayers,
+      teamSize,
       playerCount: 1,
       status: "open",
       createdAt,

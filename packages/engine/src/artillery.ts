@@ -87,8 +87,16 @@ export function terrainAt(state: GameState, x: number): number {
 export interface InitOptions {
   players: number;
   seed: number;
+  /** Players per team: 0 (or 1) = free-for-all; 2/3/4 = 2v2/3v3/4v4. */
+  teamSize?: number;
   width?: number;
   height?: number;
+}
+
+/** Team a seat belongs to. FFA → its own team (== seat); team mode → block of
+ *  `teamSize` seats (0…S-1 = team 0 on the left, S…2S-1 = team 1 on the right). */
+export function teamOf(seat: number, teamSize: number): number {
+  return teamSize >= 2 ? Math.floor(seat / teamSize) : seat;
 }
 
 /** Fresh battlefield: hills + N tanks spread across the width, seat 0 to move. */
@@ -96,6 +104,7 @@ export function createInitialState(opts: InitOptions): GameState {
   const width = opts.width ?? WORLD_WIDTH;
   const height = opts.height ?? WORLD_HEIGHT;
   const n = Math.max(2, opts.players);
+  const teamSize = opts.teamSize && opts.teamSize >= 2 ? opts.teamSize : 0;
   const terrain = generateTerrain(width, opts.seed);
 
   const margin = Math.round(width * 0.08);
@@ -105,6 +114,7 @@ export function createInitialState(opts: InitOptions): GameState {
     const x = n === 1 ? Math.round(width / 2) : Math.round(margin + (span * i) / (n - 1));
     tanks.push({
       seat: i,
+      team: teamOf(i, teamSize),
       x,
       health: 100,
       alive: true,
@@ -120,6 +130,7 @@ export function createInitialState(opts: InitOptions): GameState {
     height,
     terrain,
     tanks,
+    teamSize,
     turn: 0,
     wind: windFromSeed(windSeed),
     seed: windSeed,
@@ -442,8 +453,11 @@ export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
   tanks[state.turn] = { ...tanks[state.turn], angle: shot.angle, power: shot.power };
 
   const aliveAfter = tanks.filter((t) => t.alive);
-  const gameOver = aliveAfter.length <= 1;
-  const winner = gameOver ? (aliveAfter.length === 1 ? aliveAfter[0].seat : null) : null;
+  const aliveTeams = new Set(aliveAfter.map((t) => t.team));
+  const gameOver = aliveTeams.size <= 1;
+  // Winning team (and a representative surviving seat). Both null on a wipe.
+  const winningTeam = gameOver && aliveTeams.size === 1 ? [...aliveTeams][0] : null;
+  const winner = winningTeam !== null ? aliveAfter[0].seat : null;
 
   const advancedSeed = nextSeed(state.seed);
   const base: GameState = {
@@ -464,7 +478,7 @@ export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
         movesLeft: MOVES_PER_TURN, // fresh drive budget for the next player
       };
 
-  return { shells, damage, endState, outcome: { gameOver, winner } };
+  return { shells, damage, endState, outcome: { gameOver, winner, winningTeam } };
 }
 
 // ─────────────────────────── hashing ───────────────────────────
