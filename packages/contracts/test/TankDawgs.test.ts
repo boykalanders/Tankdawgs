@@ -172,6 +172,25 @@ describe("TankDawgs", () => {
       await expect(game.connect(a).finishGame(GAME_ID, a.address)).to.be.revertedWith("not authorized");
       await game.connect(owner).finishGame(GAME_ID, a.address);
     });
+    it("setRegistry validates the target + the registry can open the gate", async () => {
+      // A non-registry address (EOA / wrong contract) is rejected.
+      await expect(game.connect(owner).setRegistry(outsider.address)).to.be.revertedWith("bad registry");
+
+      const reg = await (await ethers.getContractFactory("MockRegistry")).deploy();
+      await game.connect(owner).setRegistry(await reg.getAddress());
+      expect(await game.registry()).to.equal(await reg.getAddress());
+
+      // The registry now drives the gate: outsider holds no local NFT, but the
+      // registry can vouch for them.
+      expect(await game.ownsNFT(outsider.address)).to.equal(false);
+      await reg.setAllow(true);
+      expect(await game.ownsNFT(outsider.address)).to.equal(true);
+
+      // Clearing it (zero address) is always allowed.
+      await game.connect(owner).setRegistry(ethers.ZeroAddress);
+      expect(await game.registry()).to.equal(ethers.ZeroAddress);
+    });
+
     it("exposes wiring + MAX_PLAYERS", async () => {
       expect(await game.MAX_PLAYERS()).to.equal(8);
       expect(await game.rewardToken()).to.equal(await token.getAddress());
