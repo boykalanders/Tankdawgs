@@ -13,9 +13,19 @@ import { weaponById, DEFAULT_WEAPON } from "./weapons.js";
 export const WORLD_WIDTH = 1200;
 export const WORLD_HEIGHT = 600;
 
-const GRAVITY = 0.32; // per step², downward (y grows down)
-const POWER_SCALE = 0.2; // power 0–100 → speed 0–20 units/step
+// ── external ballistics ──────────────────────────────────────────────────
+// A shell obeys real projectile motion. Gravity pulls it down at a constant
+// accel; air drag opposes its motion and grows with speed², so it bleeds the
+// most energy just off the muzzle (where it's fastest — "supersonic") and ever
+// less as it slows. Between drag losses, kinetic and potential energy trade off
+// (conservation of energy): the shell is slowest at the apex and speeds back up
+// as it falls — but, having shed energy to drag, it always strikes BELOW its
+// muzzle velocity. High power ⇒ high muzzle velocity ⇒ a flatter, faster path.
+const GRAVITY = 0.32; // downward accel per step² (y grows down)
+const POWER_SCALE = 0.3; // power 1–100 → muzzle speed 0.3–30 units/step
 const WIND_ACCEL = 0.03; // horizontal accel per step at |wind| = 1
+const DRAG = 0.0009; // quadratic air-drag coefficient (accel = DRAG·speed²)
+const SUBSTEPS = 3; // integration sub-steps per recorded path point
 const DT = 1;
 const MAX_STEPS = 3000;
 const MUZZLE_RISE = 16; // launch this far above the tank's surface
@@ -230,25 +240,54 @@ function integrate(
   let y = origin.y;
   const path: Point[] = [{ x, y }];
   const { width, turn } = state;
+  const windAccel = state.wind * WIND_ACCEL;
+  const h = DT / SUBSTEPS;
 
+  // One recorded path point per step; integrate each step as SUBSTEPS smaller
+  // sub-steps so quadratic drag stays accurate/stable and a fast shell can't
+  // tunnel past a tank between samples.
   for (let step = 0; step < MAX_STEPS; step++) {
-    vx += state.wind * WIND_ACCEL * DT;
-    vy += GRAVITY * DT;
-    x += vx * DT;
-    y += vy * DT;
-    path.push({ x, y });
+    let impact: Point | null = null;
+    let offBoard = false;
+    for (let sub = 0; sub < SUBSTEPS; sub++) {
+      // Drag opposes velocity and scales with speed (force ∝ speed²); wind nudges
+      // the air it flies through; gravity pulls it down.
+      const speed = Math.hypot(vx, vy);
+      vx += (windAccel - DRAG * speed * vx) * h;
+      vy += (GRAVITY - DRAG * speed * vy) * h;
+      x += vx * h;
+      y += vy * h;
 
-    if (x < 0 || x >= width) return { path, impact: null }; // off the sides
-    for (const t of state.tanks) {
-      if (!t.alive) continue;
-      if (t.seat === turn && step < ignoreShooterSteps) continue;
-      const c = tankCentre(t, terrain, width);
-      if ((x - c.x) ** 2 + (y - c.y) ** 2 <= TANK_HIT_RADIUS * TANK_HIT_RADIUS) {
-        return { path, impact: { x, y } };
+      if (x < 0 || x >= width) {
+        offBoard = true; // off the sides
+        break;
+      }
+      let hitTank = false;
+      for (const t of state.tanks) {
+        if (!t.alive) continue;
+        if (t.seat === turn && step < ignoreShooterSteps) continue;
+        const c = tankCentre(t, terrain, width);
+        if ((x - c.x) ** 2 + (y - c.y) ** 2 <= TANK_HIT_RADIUS * TANK_HIT_RADIUS) {
+          hitTank = true;
+          break;
+        }
+      }
+      if (hitTank) {
+        impact = { x, y };
+        break;
+      }
+      if (y >= terrain[clampX(x, width)]) {
+        impact = { x, y };
+        break;
+      }
+      if (y >= WORLD_HEIGHT) {
+        impact = { x, y: WORLD_HEIGHT };
+        break;
       }
     }
-    if (y >= terrain[clampX(x, width)]) return { path, impact: { x, y } };
-    if (y >= WORLD_HEIGHT) return { path, impact: { x, y: WORLD_HEIGHT } };
+    path.push({ x, y });
+    if (offBoard) return { path, impact: null };
+    if (impact) return { path, impact };
   }
   return { path, impact: { x, y } };
 }

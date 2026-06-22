@@ -117,7 +117,14 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
 
     const shells = animation.shells;
     const lastSimStep = Math.max(1, ...shells.map((s) => s.startStep + s.path.length));
-    const stepPerFrame = Math.max(2, Math.round(lastSimStep / 100)); // ~1.5–2s flight
+    // Run the clock at ~real simulation time (≈0.9 sim-steps/frame) so the shell
+    // travels at its true ballistic speed — fast off the muzzle, slowing as drag
+    // and the climb bleed its energy — rather than stretching every shot to a
+    // fixed duration. The on-screen flight is clamped to a comfortable window.
+    const MIN_FRAMES = 42; // ~0.7s floor (short shots stay readable)
+    const MAX_FRAMES = 168; // ~2.8s ceiling (long lobs don't drag on)
+    const totalFrames = Math.max(MIN_FRAMES, Math.min(MAX_FRAMES, lastSimStep / 0.9));
+    const stepPerFrame = lastSimStep / totalFrames;
     const FADE = 26; // explosion fade in frames
     const bursts: Burst[] = [];
     const burstFired = new Set<number>();
@@ -135,15 +142,25 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
       shells.forEach((shell, i) => {
         if (simStep < shell.startStep) return; // not launched yet
         const w = weaponById(shell.weaponId);
-        const local = simStep - shell.startStep;
-        const head = Math.min(local, shell.path.length - 1);
-        trails.push({ pts: shell.path.slice(0, head + 1), color: w.style.trail });
-        if (local < shell.path.length - 1) {
-          heads.push({ p: shell.path[head], color: w.style.shell, r: w.style.shellRadius });
-        } else if (shell.impact && !burstFired.has(i)) {
-          burstFired.add(i);
-          bursts.push({ x: shell.impact.x, y: shell.impact.y, color: w.style.burst, radius: w.blastRadius, born: frame });
-          if (!mutedRef.current) playBoom(w.blastRadius);
+        const local = simStep - shell.startStep; // fractional steps along the path
+        const lastIdx = shell.path.length - 1;
+        if (local < lastIdx) {
+          // Interpolate the head between samples so it glides smoothly at any
+          // speed — the gap between samples already encodes the real velocity.
+          const i0 = Math.floor(local);
+          const frac = local - i0;
+          const a = shell.path[i0];
+          const b = shell.path[Math.min(i0 + 1, lastIdx)];
+          const p = { x: a.x + (b.x - a.x) * frac, y: a.y + (b.y - a.y) * frac };
+          trails.push({ pts: shell.path.slice(0, i0 + 1).concat(p), color: w.style.trail });
+          heads.push({ p, color: w.style.shell, r: w.style.shellRadius });
+        } else {
+          trails.push({ pts: shell.path, color: w.style.trail });
+          if (shell.impact && !burstFired.has(i)) {
+            burstFired.add(i);
+            bursts.push({ x: shell.impact.x, y: shell.impact.y, color: w.style.burst, radius: w.blastRadius, born: frame });
+            if (!mutedRef.current) playBoom(w.blastRadius);
+          }
         }
       });
 
