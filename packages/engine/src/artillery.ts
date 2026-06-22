@@ -412,32 +412,52 @@ export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
     }
     case "mirv": {
       const primary = fire(shot.angle, shot.power);
-      // Split partway down the descent (past the apex, but high enough to fan
-      // out). Warheads INHERIT the primary's velocity there + a horizontal
-      // spread, so they keep travelling toward — and around — the target.
+      // Deploy at the apex — the highest, safely-airborne point of the arc — so
+      // the warheads fan out and rain down. Splitting at the very top (rather
+      // than partway into the descent) keeps the split point clear of terrain.
       let apex = 0;
       for (let i = 1; i < primary.path.length; i++) if (primary.path[i].y < primary.path[apex].y) apex = i;
-      const k = Math.min(
-        primary.path.length - 2,
-        Math.max(apex + 1, Math.floor(apex + (primary.path.length - apex) * 0.35))
-      );
-      const splitPt = primary.path[Math.max(1, k)];
-      const prev = primary.path[Math.max(0, k - 1)];
-      const baseVx = splitPt.x - prev.x;
-      const baseVy = splitPt.y - prev.y;
-      shells.push({ path: primary.path.slice(0, k + 1), impact: null, startStep: 0, weaponId: weapon.id });
-      for (let i = 0; i < weapon.count; i++) {
-        const spread = (i - (weapon.count - 1) / 2) * 1.6; // fan the warheads out
-        const { path, impact } = integrate(
-          { x: splitPt.x, y: splitPt.y },
-          baseVx + spread,
-          baseVy,
-          state,
-          terrain,
-          0
-        );
-        if (impact) explode(impact, R, D, G);
-        shells.push({ path, impact, startStep: k, weaponId: weapon.id });
+      const splitPt = primary.path[apex];
+      const clearance = terrain[clampX(splitPt.x, width)] - splitPt.y; // height over ground
+      // A clean air deploy needs a real arc with room to fall. If the shell ran
+      // into a mountain (or a tank) before that, the apex sits at/near the
+      // surface — don't split there.
+      const cleanSplit =
+        apex >= 1 && apex <= primary.path.length - 3 && clearance >= 40;
+
+      if (cleanSplit) {
+        const prev = primary.path[apex - 1];
+        const baseVx = splitPt.x - prev.x; // ~horizontal velocity at the top
+        shells.push({ path: primary.path.slice(0, apex + 1), impact: null, startStep: 0, weaponId: weapon.id });
+        for (let i = 0; i < weapon.count; i++) {
+          const spread = (i - (weapon.count - 1) / 2) * 1.8; // fan the warheads out
+          const { path, impact } = integrate(
+            { x: splitPt.x, y: splitPt.y },
+            baseVx + spread,
+            0.4, // a slight downward kick so they commit to the descent
+            state,
+            terrain,
+            0
+          );
+          if (impact) explode(impact, R, D, G);
+          shells.push({ path, impact, startStep: apex, weaponId: weapon.id });
+        }
+      } else {
+        // Slammed into terrain/a tank before it could deploy: detonate where it
+        // hit, then scatter the warheads up-and-out from there (like a cluster)
+        // so they spread across the slope instead of tunnelling into it.
+        const hit = primary.impact ?? primary.path[primary.path.length - 1];
+        if (primary.impact) explode(primary.impact, R, D, G);
+        shells.push({ path: primary.path, impact: primary.impact, startStep: 0, weaponId: weapon.id });
+        const at = primary.path.length;
+        for (let i = 0; i < weapon.count; i++) {
+          const angle = 60 + rng() * 60; // up and out
+          const power = 24 + rng() * 16;
+          const from: Point = { x: hit.x, y: hit.y - 4 };
+          const { path, impact } = fire(angle, power, from);
+          if (impact) explode(impact, R, D, G);
+          shells.push({ path, impact, startStep: at, weaponId: weapon.id });
+        }
       }
       break;
     }

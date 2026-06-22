@@ -102,6 +102,9 @@ export interface ShotResult {
 /** How a weapon behaves on top of the base ballistics. */
 export type WeaponKind = "single" | "fan" | "cluster" | "mirv" | "roller" | "napalm";
 
+/** Explosion flavour driving the renderer's impact particle FX. */
+export type BlastFx = "blast" | "fire" | "dirt" | "spark" | "plasma" | "frost";
+
 /** Visual styling for a weapon's shell + explosion (renderer only). */
 export interface WeaponStyle {
   /** Shell body colour. */
@@ -112,6 +115,11 @@ export interface WeaponStyle {
   burst: string;
   /** Shell radius in world units. */
   shellRadius: number;
+  /** Explosion flavour — picks the particle style (debris, fire, sparks…).
+   *  Defaults to "blast" when omitted. */
+  fx?: BlastFx;
+  /** Secondary particle/smoke tint; defaults to a muted grey when omitted. */
+  smoke?: string;
 }
 
 /** A weapon definition. The registry is intentionally small but extensible — the

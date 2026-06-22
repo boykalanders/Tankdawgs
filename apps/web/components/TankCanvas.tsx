@@ -8,6 +8,7 @@ import {
   type GameState,
   type Point,
   type Shell,
+  type Weapon,
 } from "@tankdawgs/engine";
 import { playBoom, playFire } from "@/lib/sound";
 
@@ -61,6 +62,136 @@ interface Burst {
   color: string;
   radius: number;
   born: number; // frame index when it started
+}
+
+/** A flying debris/spark/smoke particle thrown by an explosion. */
+interface Particle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  grav: number;
+  life: number;
+  maxLife: number;
+  size: number;
+  grow: number; // size change per frame (smoke billows)
+  color: string;
+  shape: "chunk" | "spark" | "smoke";
+}
+
+/** An expanding shockwave ring; render state is derived from its age. */
+interface ShockSrc {
+  x: number;
+  y: number;
+  born: number;
+  maxR: number;
+  life: number;
+  color: string;
+  width: number;
+}
+
+/** Spawn an explosion's particles + shockwave for a weapon's FX flavour. Pushes
+ *  into the live arrays and returns a screen-flash amount (0 = none). Particle
+ *  counts scale with the weapon's blast radius, so a bigger affect range reads
+ *  as a visibly bigger explosion. Renderer-only — uses Math.random freely. */
+function spawnExplosion(
+  ex: number,
+  ey: number,
+  w: Weapon,
+  frame: number,
+  particles: Particle[],
+  shocks: ShockSrc[]
+): number {
+  const R = w.blastRadius;
+  const fx = w.style.fx ?? "blast";
+  const smoke = w.style.smoke ?? "#5a544a";
+  const burst = w.style.burst;
+  const shell = w.style.shell;
+  const r = Math.random;
+  const dens = R / 34; // particle density scales with the blast's affect range
+  let flash = 0;
+
+  const ring = (mult: number, life: number, color: string, width: number) =>
+    shocks.push({ x: ex, y: ey, born: frame, maxR: R * mult, life, color, width: Math.max(2, R * width) });
+
+  // mode "plume" throws up-and-out (debris), "radial" sprays in all directions.
+  const emit = (
+    count: number,
+    shape: Particle["shape"],
+    spd: [number, number],
+    life: [number, number],
+    size: [number, number],
+    grav: number,
+    colors: string[],
+    grow: number,
+    mode: "plume" | "radial"
+  ) => {
+    for (let i = 0; i < count; i++) {
+      const sp = spd[0] + r() * (spd[1] - spd[0]);
+      let vx: number;
+      let vy: number;
+      if (mode === "radial") {
+        const a = r() * Math.PI * 2;
+        vx = Math.cos(a) * sp;
+        vy = Math.sin(a) * sp;
+      } else {
+        vx = (r() * 2 - 1) * sp;
+        vy = -(0.2 + r()) * sp; // bias upward
+      }
+      const ml = Math.round(life[0] + r() * (life[1] - life[0]));
+      particles.push({
+        x: ex,
+        y: ey,
+        vx,
+        vy,
+        grav,
+        life: ml,
+        maxLife: ml,
+        size: size[0] + r() * (size[1] - size[0]),
+        grow,
+        color: colors[(r() * colors.length) | 0],
+        shape,
+      });
+    }
+  };
+
+  switch (fx) {
+    case "fire":
+      ring(1.6, 16, "#ffb86a", 0.08);
+      emit(Math.round(18 * dens), "spark", [1.2, 4.5], [16, 34], [1.5, 3], 0.05, ["#ffd24a", "#ff7a1f", "#ff4a10", "#ffae3a"], 0, "plume");
+      emit(Math.round(7 * dens), "smoke", [0.3, 1.2], [34, 56], [6, 12], -0.015, [smoke, "#1c1814"], 0.5, "plume");
+      break;
+    case "dirt":
+      ring(1.5, 18, "#caa86a", 0.07);
+      emit(Math.round(16 * dens), "chunk", [1.5, 5], [20, 40], [2, 4.5], 0.42, ["#a8854a", "#7a5e34", "#c9a76a", "#5a4a2e"], 0, "plume");
+      emit(Math.round(8 * dens), "smoke", [0.3, 1.1], [26, 46], [5, 10], -0.01, [smoke, "#6b5a3e"], 0.6, "plume");
+      break;
+    case "spark":
+      ring(1.9, 12, shell, 0.05);
+      emit(Math.round(22 * dens), "spark", [3, 8], [8, 18], [1, 2.4], 0.12, ["#ffffff", shell, burst], 0, "radial");
+      emit(Math.round(3 * dens), "smoke", [0.2, 0.8], [18, 30], [3, 6], -0.01, [smoke], 0.4, "plume");
+      break;
+    case "plasma":
+      ring(2.6, 14, "#bdf6ff", 0.1);
+      ring(1.5, 10, "#ffffff", 0.05);
+      emit(Math.round(24 * dens), "spark", [3.5, 9], [8, 20], [1, 2.6], 0.05, ["#ffffff", "#aef6ff", "#39d6ff", "#7fd8ff"], 0, "radial");
+      break;
+    case "frost":
+      ring(2, 22, "#eafaff", 0.08);
+      emit(Math.round(16 * dens), "chunk", [1.4, 4.5], [24, 44], [1.5, 3.5], 0.18, ["#dff4ff", "#a9e2ff", "#ffffff", "#bfe6f5"], 0, "plume");
+      emit(Math.round(9 * dens), "smoke", [0.2, 1], [34, 52], [6, 13], -0.02, ["#cfeaf6", "#eafaff"], 0.6, "plume");
+      break;
+    default: // "blast"
+      ring(2.1, 20, "#ffe6a8", 0.1);
+      if (R >= 70) {
+        flash = Math.min(0.8, R / 130); // nuke-class white flash
+        ring(1.4, 14, "#ffffff", 0.06);
+      }
+      emit(Math.round(14 * dens), "chunk", [1.6, 5.5], [18, 40], [2, 4.5], 0.38, [burst, shell, "#ffd24a", "#ff9a3a"], 0, "plume");
+      emit(Math.round(8 * dens), "smoke", [0.3, 1.3], [30, 50], [6, 12], -0.02, [smoke, "#3a342c"], 0.6, "plume");
+      emit(Math.round(6 * dens), "spark", [3, 7], [8, 16], [1, 2.2], 0.1, ["#ffffff", burst], 0, "radial");
+  }
+  return flash;
 }
 
 /** Per-seat impact feedback, latched when a blast first overlaps a tank. */
@@ -165,7 +296,10 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
     const bursts: Burst[] = [];
     const burstFired = new Set<number>();
     const impacts = new Map<number, ImpactFx>(); // seat → latched hit feedback
+    const particles: Particle[] = []; // debris / sparks / smoke
+    const shocks: ShockSrc[] = []; // expanding shockwave rings
     let shakeMag = 0; // current screen-shake amplitude (px), decays each frame
+    let flashMag = 0; // full-screen white flash (huge blasts), decays each frame
     let frame = 0;
     // Positions are settled when a shot fires; sync so tanks render in place.
     displayedRef.current = pre.tanks.map((t) => t.x);
@@ -201,6 +335,7 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
           if (shell.impact && !burstFired.has(i)) {
             burstFired.add(i);
             bursts.push({ x: shell.impact.x, y: shell.impact.y, color: w.style.burst, radius: w.blastRadius, born: frame });
+            flashMag = Math.max(flashMag, spawnExplosion(shell.impact.x, shell.impact.y, w, frame, particles, shocks));
             if (!mutedRef.current) playBoom(w.blastRadius);
             // Latch hit feedback on any alive tank this blast overlapped — same
             // radius the engine used to deal the damage, so they always agree.
@@ -256,6 +391,25 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
           ? { x: Math.sin(frame * 1.7) * shakeMag, y: Math.sin(frame * 2.6) * shakeMag * 0.7 }
           : { x: 0, y: 0 };
 
+      // Advance particles (move, fall, billow, age out) and decay the flash.
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += p.grav;
+        p.vx *= 0.985; // air drag on debris
+        p.size += p.grow;
+        if (--p.life <= 0) particles.splice(i, 1);
+      }
+      flashMag *= 0.8;
+      // Shockwave rings, rendered from their age.
+      const rings = shocks
+        .map((s) => {
+          const t = (frame - s.born) / s.life;
+          return { x: s.x, y: s.y, r: s.maxR * t, alpha: Math.max(0, 1 - t), color: s.color, width: s.width };
+        })
+        .filter((s) => s.alpha > 0);
+
       const live = bursts.filter((b) => frame - b.born < FADE);
       const recoil = Math.max(0, 1 - frame / 7); // 0..1 over the first ~7 frames
 
@@ -273,19 +427,22 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
           shake,
           fx,
           popups,
+          particles,
+          rings,
+          flash: flashMag,
         },
         (seat) => displayedRef.current[seat] ?? pre.tanks[seat].x
       );
 
       const flying = shells.some((s) => simStep < s.startStep + s.path.length - 1);
-      // Hold the frame open until shells land, blasts fade, knockback slides
-      // settle and the last damage number has risen away.
+      // Hold the frame open until shells land, blasts fade, debris settles, the
+      // knockback slides finish and the last damage number has risen away.
       const settling = [...impacts.values()].some(
         (im) =>
           Math.abs((displayedRef.current[im.seat] ?? im.toX) - im.toX) > 0.5 ||
           (im.amount > 0 && frame - im.born < POPUP_FRAMES)
       );
-      if (!flying && live.length === 0 && !settling) {
+      if (!flying && live.length === 0 && particles.length === 0 && !settling) {
         rafRef.current = null;
         onAnimationEnd?.();
         return;
@@ -323,6 +480,12 @@ interface Overlay {
   fx?: Map<number, { health: number; bob: number }>;
   /** Floating damage numbers / kill markers. */
   popups?: Popup[];
+  /** Explosion debris / sparks / smoke. */
+  particles?: Particle[];
+  /** Expanding shockwave rings (render-ready). */
+  rings?: { x: number; y: number; r: number; alpha: number; color: string; width: number }[];
+  /** Full-screen white flash for huge blasts (0 = none). */
+  flash?: number;
 }
 
 function drawScene(
@@ -417,7 +580,7 @@ function drawScene(
     ctx.fill();
   }
 
-  // Explosions.
+  // Explosions — bright core flash.
   for (const b of overlay.bursts) {
     const age = b.age ?? 0;
     const r = b.radius * (0.4 + age * 0.9);
@@ -432,6 +595,49 @@ function drawScene(
     ctx.fill();
     ctx.globalAlpha = 1;
   }
+
+  // Shockwave rings expanding out of each blast.
+  for (const s of overlay.rings ?? []) {
+    ctx.globalAlpha = s.alpha * 0.8;
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = s.width * (0.4 + s.alpha * 0.6);
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // Debris / sparks / smoke — smoke behind, glowing sparks on top.
+  const parts = overlay.particles ?? [];
+  for (const p of parts) {
+    if (p.shape !== "smoke") continue;
+    ctx.globalAlpha = (p.life / p.maxLife) * 0.45;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, Math.max(0.5, p.size), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  for (const p of parts) {
+    if (p.shape !== "chunk") continue;
+    ctx.globalAlpha = Math.min(1, p.life / p.maxLife + 0.2);
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, Math.max(0.5, p.size), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalCompositeOperation = "lighter"; // sparks glow
+  for (const p of parts) {
+    if (p.shape !== "spark") continue;
+    ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
+    ctx.strokeStyle = p.color;
+    ctx.lineWidth = Math.max(0.6, p.size);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(p.x - p.vx * 1.6, p.y - p.vy * 1.6); // motion streak
+    ctx.stroke();
+  }
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = 1;
 
   // Floating damage numbers / kill markers, above everything.
   for (const p of overlay.popups ?? []) {
@@ -449,6 +655,14 @@ function drawScene(
   }
 
   ctx.restore(); // end camera shake
+
+  // Full-screen flash for huge blasts (drawn over everything, no shake).
+  if (overlay.flash && overlay.flash > 0.01) {
+    ctx.globalAlpha = Math.min(0.6, overlay.flash);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
 }
 
 /** A polished tank: shadow, road-wheels, beveled hull with gold trim, domed
