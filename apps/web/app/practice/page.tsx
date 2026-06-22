@@ -61,7 +61,7 @@ export default function PracticePage() {
       setBanner(null);
       const res = simulateShot(state, shot);
       pendingEnd.current = res.endState;
-      setAnim({ shells: res.shells });
+      setAnim({ shells: res.shells, endState: res.endState });
     },
     [anim, state]
   );

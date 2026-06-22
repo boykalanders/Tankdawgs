@@ -28,6 +28,12 @@ const DRAG = 0.0009; // quadratic air-drag coefficient (accel = DRAG·speed²)
 const SUBSTEPS = 3; // integration sub-steps per recorded path point
 const DT = 1;
 const MAX_STEPS = 3000;
+
+// Blast knockback: a near miss shoves a tank away from the epicentre. The push
+// scales with the blast's intensity at the tank (same falloff as damage) and
+// with how side-on the blast was — a hit directly overhead barely budges it.
+const KNOCK_SCALE = 0.5; // world-units of slide per point of blast intensity
+const MAX_KNOCK = 38; // cap the total shove per tank per shot
 const MUZZLE_RISE = 16; // launch this far above the tank's surface
 const TANK_BODY = 8; // half-height of a tank body (for hit/centre)
 const TANK_HIT_RADIUS = 14; // a pellet striking within this hits the tank
@@ -346,20 +352,28 @@ export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
 
   const shells: Shell[] = [];
   const dealt = new Map<number, number>(); // seat → damage
+  const shove = new Map<number, number>(); // seat → horizontal knockback (px)
   let rngSeed = state.seed ^ 0x5bd1e995;
   const rng = () => {
     rngSeed = nextSeed(rngSeed);
     return rand01(rngSeed);
   };
 
-  // Apply one explosion: blast-falloff damage to alive tanks, then carve.
+  // Apply one explosion: blast-falloff damage + knockback to alive tanks, then
+  // carve the crater.
   const explode = (impact: Point, radius: number, maxDamage: number, dig: number): void => {
     for (const t of state.tanks) {
       if (!t.alive) continue;
       const c = tankCentre(t, terrain, width);
-      const dist = Math.hypot(impact.x - c.x, impact.y - c.y);
+      const dx = c.x - impact.x;
+      const dist = Math.hypot(dx, impact.y - c.y);
       if (dist <= radius) {
-        dealt.set(t.seat, (dealt.get(t.seat) ?? 0) + maxDamage * (1 - dist / radius));
+        const intensity = maxDamage * (1 - dist / radius);
+        dealt.set(t.seat, (dealt.get(t.seat) ?? 0) + intensity);
+        // Push away from the epicentre, scaled by how horizontal the blast was
+        // (dx/dist): a blast to the side shoves hardest, one overhead barely.
+        const dirX = dist > 0.0001 ? dx / dist : 0;
+        shove.set(t.seat, (shove.get(t.seat) ?? 0) + dirX * intensity * KNOCK_SCALE);
       }
     }
     carve(terrain, width, impact.x, impact.y, radius, dig);
@@ -487,6 +501,18 @@ export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
     const killed = t.health === 0 && before > 0;
     if (killed) t.alive = false;
     damage.push({ seat, amount: before - t.health, killed });
+  }
+  // Knockback: shove surviving tanks along the surface, away from the blast.
+  // Wrecks (just destroyed) stay put, and a tank can't be shoved off the board
+  // or into another tank.
+  for (const [seat, raw] of shove) {
+    const t = tanks[seat];
+    if (!t.alive) continue;
+    const push = Math.max(-MAX_KNOCK, Math.min(MAX_KNOCK, raw));
+    let nx = Math.round(t.x + push);
+    nx = Math.max(0, Math.min(width - 1, nx));
+    const blocked = tanks.some((o) => o.alive && o.seat !== seat && Math.abs(o.x - nx) < 20);
+    if (!blocked) t.x = nx;
   }
   // Record the shooter's aim.
   tanks[state.turn] = { ...tanks[state.turn], angle: shot.angle, power: shot.power };

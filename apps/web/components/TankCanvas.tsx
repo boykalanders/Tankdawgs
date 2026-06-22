@@ -25,6 +25,10 @@ const SEAT_COLORS = [
 
 export interface ShotAnimation {
   shells: Shell[];
+  /** Authoritative post-shot state. The renderer diffs it against the live
+   *  (pre-shot) `state` to drive damage numbers, health drain and knockback as
+   *  each blast lands — no extra data needs to flow from the server. */
+  endState?: GameState;
 }
 
 interface TankCanvasProps {
@@ -39,6 +43,15 @@ interface TankCanvasProps {
 /** How fast a driving tank rolls, in world units per frame (~60fps). Low =
  *  slow, deliberate tread movement. */
 const DRIVE_SPEED = 1.4;
+/** Half-height of a tank body — must match the engine's TANK_BODY so blast
+ *  overlap is judged against the same hit centre. */
+const TANK_BODY = 8;
+/** Knockback slide speed (world-units/frame) when a tank is shoved by a blast. */
+const KNOCK_SPEED = 2.6;
+const DRAIN_FRAMES = 12; // frames over which a hit drains the health bar
+const JOLT_FRAMES = 14; // frames of the upward jolt after a hit
+const JOLT_RISE = 6; // peak jolt height (px)
+const POPUP_FRAMES = 34; // lifetime of a floating damage number
 
 const seatColor = (seat: number) => SEAT_COLORS[seat % SEAT_COLORS.length];
 
@@ -48,6 +61,27 @@ interface Burst {
   color: string;
   radius: number;
   born: number; // frame index when it started
+}
+
+/** Per-seat impact feedback, latched when a blast first overlaps a tank. */
+interface ImpactFx {
+  seat: number;
+  born: number; // frame the blast landed
+  amount: number; // damage dealt (for the floating number)
+  killed: boolean;
+  toX: number; // post-shot x — the tank slides here (knockback)
+  preHealth: number;
+  postHealth: number;
+}
+
+/** A floating damage number / kill marker rising above a struck tank. */
+interface Popup {
+  x: number;
+  y: number;
+  text: string;
+  color: string;
+  alpha: number;
+  big: boolean;
 }
 
 /** Canvas renderer for the artillery battlefield: terrain, luxe tanks, health
@@ -116,6 +150,8 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
     if (!canvas || !ctx) return;
 
     const shells = animation.shells;
+    const pre = stateRef.current; // board before the shot resolves
+    const post = animation.endState?.tanks ?? pre.tanks; // board after (damage + knockback)
     const lastSimStep = Math.max(1, ...shells.map((s) => s.startStep + s.path.length));
     // Run the clock at ~real simulation time (≈0.9 sim-steps/frame) so the shell
     // travels at its true ballistic speed — fast off the muzzle, slowing as drag
@@ -128,10 +164,16 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
     const FADE = 26; // explosion fade in frames
     const bursts: Burst[] = [];
     const burstFired = new Set<number>();
+    const impacts = new Map<number, ImpactFx>(); // seat → latched hit feedback
+    let shakeMag = 0; // current screen-shake amplitude (px), decays each frame
     let frame = 0;
     // Positions are settled when a shot fires; sync so tanks render in place.
-    displayedRef.current = stateRef.current.tanks.map((t) => t.x);
+    displayedRef.current = pre.tanks.map((t) => t.x);
     if (!mutedRef.current) playFire(); // cannon report at launch
+
+    // Hit centre Y of a tank at world x (matches the engine's tankCentre).
+    const centreY = (x: number) =>
+      pre.terrain[Math.max(0, Math.min(pre.terrain.length - 1, Math.round(x)))] - TANK_BODY;
 
     const tick = () => {
       frame += 1;
@@ -160,9 +202,59 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
             burstFired.add(i);
             bursts.push({ x: shell.impact.x, y: shell.impact.y, color: w.style.burst, radius: w.blastRadius, born: frame });
             if (!mutedRef.current) playBoom(w.blastRadius);
+            // Latch hit feedback on any alive tank this blast overlapped — same
+            // radius the engine used to deal the damage, so they always agree.
+            const impact = shell.impact;
+            for (const t of pre.tanks) {
+              if (!t.alive || impacts.has(t.seat)) continue;
+              const d = Math.hypot(impact.x - t.x, impact.y - centreY(t.x));
+              if (d > w.blastRadius) continue;
+              const pst = post[t.seat];
+              impacts.set(t.seat, {
+                seat: t.seat,
+                born: frame,
+                amount: Math.max(0, t.health - pst.health),
+                killed: t.alive && !pst.alive,
+                toX: pst.x,
+                preHealth: t.health,
+                postHealth: pst.health,
+              });
+              shakeMag = Math.max(shakeMag, Math.min(9, 3 + w.blastRadius * 0.08 + (t.health - pst.health) * 0.12));
+            }
           }
         }
       });
+
+      // Advance knockback slides and build per-seat draw overrides + popups.
+      const fx = new Map<number, { health: number; bob: number }>();
+      const popups: Popup[] = [];
+      for (const im of impacts.values()) {
+        const cur = displayedRef.current[im.seat] ?? pre.tanks[im.seat].x;
+        const dx = im.toX - cur;
+        displayedRef.current[im.seat] =
+          Math.abs(dx) > KNOCK_SPEED ? cur + Math.sign(dx) * KNOCK_SPEED : im.toX;
+        const age = frame - im.born;
+        const drain = Math.min(1, age / DRAIN_FRAMES);
+        const health = im.preHealth + (im.postHealth - im.preHealth) * drain;
+        const bob = age < JOLT_FRAMES ? -Math.sin((age / JOLT_FRAMES) * Math.PI) * JOLT_RISE : 0;
+        fx.set(im.seat, { health, bob });
+        if (im.amount > 0 && age < POPUP_FRAMES) {
+          const px = displayedRef.current[im.seat] ?? im.toX;
+          popups.push({
+            x: px,
+            y: centreY(px) - 40 - age * 0.9,
+            text: im.killed ? "DESTROYED" : `-${im.amount}`,
+            color: im.killed ? "#ff5a4a" : "#ffd24a",
+            alpha: Math.max(0, 1 - age / POPUP_FRAMES),
+            big: im.killed,
+          });
+        }
+      }
+      shakeMag *= 0.86;
+      const shake =
+        shakeMag > 0.3
+          ? { x: Math.sin(frame * 1.7) * shakeMag, y: Math.sin(frame * 2.6) * shakeMag * 0.7 }
+          : { x: 0, y: 0 };
 
       const live = bursts.filter((b) => frame - b.born < FADE);
       const recoil = Math.max(0, 1 - frame / 7); // 0..1 over the first ~7 frames
@@ -170,7 +262,7 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
       drawScene(
         ctx,
         canvas,
-        stateRef.current,
+        pre,
         null,
         mySeat,
         {
@@ -178,12 +270,22 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
           trails,
           bursts: live.map((b) => ({ ...b, age: (frame - b.born) / FADE })),
           recoil,
+          shake,
+          fx,
+          popups,
         },
-        (seat) => displayedRef.current[seat] ?? stateRef.current.tanks[seat].x
+        (seat) => displayedRef.current[seat] ?? pre.tanks[seat].x
       );
 
       const flying = shells.some((s) => simStep < s.startStep + s.path.length - 1);
-      if (!flying && live.length === 0) {
+      // Hold the frame open until shells land, blasts fade, knockback slides
+      // settle and the last damage number has risen away.
+      const settling = [...impacts.values()].some(
+        (im) =>
+          Math.abs((displayedRef.current[im.seat] ?? im.toX) - im.toX) > 0.5 ||
+          (im.amount > 0 && frame - im.born < POPUP_FRAMES)
+      );
+      if (!flying && live.length === 0 && !settling) {
         rafRef.current = null;
         onAnimationEnd?.();
         return;
@@ -215,6 +317,12 @@ interface Overlay {
   bursts: { x: number; y: number; color: string; radius: number; age?: number }[];
   /** 0 = at rest, 1 = full recoil (applied to the seat on turn). */
   recoil: number;
+  /** Camera shake offset (px) applied to the world during a blast. */
+  shake?: { x: number; y: number };
+  /** Per-seat hit overrides: drained health + vertical jolt. */
+  fx?: Map<number, { health: number; bob: number }>;
+  /** Floating damage numbers / kill markers. */
+  popups?: Popup[];
 }
 
 function drawScene(
@@ -229,7 +337,8 @@ function drawScene(
   const W = canvas.width;
   const H = canvas.height;
 
-  // Sky with a soft sun glow.
+  // Sky with a soft sun glow (drawn before any camera shake so the screen edges
+  // never reveal a gap when the world is jolted).
   const sky = ctx.createLinearGradient(0, 0, 0, H);
   sky.addColorStop(0, "#1b2733");
   sky.addColorStop(0.6, "#33485c");
@@ -241,6 +350,10 @@ function drawScene(
   sun.addColorStop(1, "rgba(255,236,180,0)");
   ctx.fillStyle = sun;
   ctx.fillRect(0, 0, W, H);
+
+  // Everything below the sky shakes together as one "camera".
+  ctx.save();
+  ctx.translate(overlay.shake?.x ?? 0, overlay.shake?.y ?? 0);
 
   // Terrain.
   ctx.beginPath();
@@ -271,7 +384,10 @@ function drawScene(
     const onTurn = !state.gameOver && state.turn === tank.seat;
     const useAim = aim && mySeat === tank.seat ? aim : { angle: tank.angle, power: tank.power };
     const colorIdx = state.teamSize > 0 ? tank.team : tank.seat;
-    drawTank(ctx, drawX, ty, colorIdx, useAim.angle, tank.alive, tank.health, onTurn, onTurn ? overlay.recoil : 0);
+    // A struck tank drains its health bar and jolts upward as the blast lands.
+    const hit = overlay.fx?.get(tank.seat);
+    const shownHealth = hit ? hit.health : tank.health;
+    drawTank(ctx, drawX, ty, colorIdx, useAim.angle, tank.alive, shownHealth, onTurn, onTurn ? overlay.recoil : 0, hit?.bob ?? 0);
     // Wind read-out above the tank whose turn it is.
     if (onTurn && tank.alive) drawWindTag(ctx, drawX, Math.max(16, ty - 66), state.wind);
   }
@@ -316,6 +432,23 @@ function drawScene(
     ctx.fill();
     ctx.globalAlpha = 1;
   }
+
+  // Floating damage numbers / kill markers, above everything.
+  for (const p of overlay.popups ?? []) {
+    ctx.globalAlpha = p.alpha;
+    ctx.font = `bold ${p.big ? 20 : 17}px ui-sans-serif, system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(0,0,0,0.7)";
+    ctx.strokeText(p.text, p.x, p.y);
+    ctx.fillStyle = p.color;
+    ctx.fillText(p.text, p.x, p.y);
+    ctx.globalAlpha = 1;
+    ctx.textAlign = "start";
+  }
+
+  ctx.restore(); // end camera shake
 }
 
 /** A polished tank: shadow, road-wheels, beveled hull with gold trim, domed
@@ -329,7 +462,8 @@ function drawTank(
   alive: boolean,
   health: number,
   onTurn: boolean,
-  recoil: number
+  recoil: number,
+  bob = 0
 ): void {
   const color = seatColor(seat);
   const baseY = surfaceY;
@@ -345,15 +479,15 @@ function drawTank(
     return;
   }
 
-  // Recoil shifts the whole tank opposite the barrel.
+  // Recoil shifts the whole tank opposite the barrel; bob lifts it on a blast.
   const rad = (angleDeg * Math.PI) / 180;
   const cx = x - Math.cos(rad) * 6 * recoil;
-  const cy = baseY;
+  const cy = baseY + bob;
 
-  // Ground shadow.
+  // Ground shadow — stays on the ground (tightens as the tank is jolted up).
   ctx.fillStyle = "rgba(0,0,0,0.3)";
   ctx.beginPath();
-  ctx.ellipse(cx, cy + 1, 20, 5, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx, baseY + 1, Math.max(12, 20 + bob), 5, 0, 0, Math.PI * 2);
   ctx.fill();
 
   // Barrel (under turret) — tapered with a muzzle brake.
