@@ -6,6 +6,7 @@ import {
   stateHash,
   validateShot,
   seedFromString,
+  terrainAt,
   MOVES_PER_TURN,
   WORLD_WIDTH,
   type GameState,
@@ -111,6 +112,41 @@ describe("artillery engine — firing", () => {
     const s = init(2);
     const res = simulateShot(s, { angle: 80, power: 70, weaponId: "mirv" });
     expect(res.shells.filter((sh) => sh.startStep > 0).length).toBe(4);
+  });
+
+  it("a low MIRV that hits terrain early still deploys 4 warheads without tunnelling", () => {
+    const s = init(2);
+    // A flat, low shot drives into the ground before reaching a clean apex.
+    const res = simulateShot(s, { angle: 12, power: 30, weaponId: "mirv" });
+    expect(res.shells.filter((sh) => sh.startStep > 0).length).toBe(4);
+    // No projectile begins life buried below the surface.
+    for (const sh of res.shells) {
+      const p0 = sh.path[0];
+      expect(p0.y).toBeLessThanOrEqual(terrainAt(res.endState, p0.x) + 2);
+    }
+  });
+
+  it("a salvo fires several slugs at stepped power", () => {
+    const s = init(2);
+    const res = simulateShot(s, { angle: 45, power: 55, weaponId: "railgun" });
+    expect(res.shells).toHaveLength(3);
+    expect(res.shells.every((sh) => sh.startStep === 0)).toBe(true);
+  });
+
+  it("a side-on blast knocks a surviving tank away from the epicentre", () => {
+    const s = init(2);
+    const shot: ShotInput = { angle: 80, power: 30, weaponId: "bigshot" };
+    // Find a clean ground impact with the target parked far out of the blast.
+    s.tanks[1].x = s.width - 5;
+    const impact = firstImpact(simulateShot(structuredClone(s), shot));
+    expect(impact).toBeTruthy();
+    // Sit the target inside the 60px blast but clear of a direct hit, at full HP.
+    const startX = Math.round(impact!.x) + 24;
+    s.tanks[1].x = startX;
+    s.tanks[1].health = 100;
+    const res = simulateShot(s, shot);
+    expect(res.endState.tanks[1].alive).toBe(true);
+    expect(res.endState.tanks[1].x).toBeGreaterThan(startX); // shoved to the right
   });
 
   it("roller produces a single shell with a long (flight + roll) path", () => {

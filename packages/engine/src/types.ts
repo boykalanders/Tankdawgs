@@ -99,8 +99,16 @@ export interface ShotResult {
   outcome: { gameOver: boolean; winner: number | null; winningTeam: number | null };
 }
 
-/** How a weapon behaves on top of the base ballistics. */
-export type WeaponKind = "single" | "fan" | "cluster" | "mirv" | "roller" | "napalm";
+/** How a weapon behaves on top of the base ballistics.
+ *  • single  — one shell.
+ *  • fan     — `count` pellets spread by ANGLE (`spreadDeg`).
+ *  • salvo   — `count` shells on the SAME angle at stepped POWER (`powerSpread`),
+ *              so they string out along the trajectory.
+ *  • cluster — one shell that splits into `count` bomblets on impact.
+ *  • mirv    — one shell that splits into `count` warheads at the apex.
+ *  • roller  — one shell that rolls downhill before exploding.
+ *  • napalm  — one shell that spreads a burning strip across the terrain. */
+export type WeaponKind = "single" | "fan" | "salvo" | "cluster" | "mirv" | "roller" | "napalm";
 
 /** Explosion flavour driving the renderer's impact particle FX. */
 export type BlastFx = "blast" | "fire" | "dirt" | "spark" | "plasma" | "frost";
@@ -120,6 +128,8 @@ export interface WeaponStyle {
   fx?: BlastFx;
   /** Secondary particle/smoke tint; defaults to a muted grey when omitted. */
   smoke?: string;
+  /** Leave burning flames at the impact for a beat after the blast (Napalm). */
+  lingerFire?: boolean;
 }
 
 /** A weapon definition. The registry is intentionally small but extensible — the
@@ -136,9 +146,17 @@ export interface Weapon {
   maxDamage: number;
   /** How much terrain the blast removes, as a multiple of blastRadius. */
   digFactor: number;
-  /** Sub-projectile count (fan pellets, cluster bomblets, MIRV warheads). */
+  /** Sub-projectile count (fan pellets, salvo slugs, cluster bomblets, warheads). */
   count: number;
   /** Angular spread (degrees) for a fan. */
   spreadDeg: number;
+  /** Power step between salvo slugs (kind "salvo"); ignored otherwise. */
+  powerSpread?: number;
+  /** Muzzle-velocity multiplier — high = flatter, faster (e.g. Railgun);
+   *  low = a heavier, loftier arc (e.g. Big Shot). Defaults to 1. */
+  velocityScale?: number;
+  /** Knockback multiplier — how hard the blast shoves a tank. 0 ≈ none,
+   *  1 = standard, >2 launches it. Defaults to 1. */
+  knockback?: number;
   style: WeaponStyle;
 }

@@ -247,15 +247,19 @@ function integrate(
   const path: Point[] = [{ x, y }];
   const { width, turn } = state;
   const windAccel = state.wind * WIND_ACCEL;
-  const h = DT / SUBSTEPS;
+  // More sub-steps for faster shells so the sub-step hop stays < a tank's hit
+  // radius — a hyper-velocity Railgun slug can't tunnel past a tank between
+  // samples. Capped so a grazing shot doesn't run forever.
+  const subSteps = Math.min(10, Math.max(SUBSTEPS, Math.ceil(Math.hypot(vx0, vy0) / 9)));
+  const h = DT / subSteps;
 
-  // One recorded path point per step; integrate each step as SUBSTEPS smaller
+  // One recorded path point per step; integrate each step as subSteps smaller
   // sub-steps so quadratic drag stays accurate/stable and a fast shell can't
   // tunnel past a tank between samples.
   for (let step = 0; step < MAX_STEPS; step++) {
     let impact: Point | null = null;
     let offBoard = false;
-    for (let sub = 0; sub < SUBSTEPS; sub++) {
+    for (let sub = 0; sub < subSteps; sub++) {
       // Drag opposes velocity and scales with speed (force ∝ speed²); wind nudges
       // the air it flies through; gravity pulls it down.
       const speed = Math.hypot(vx, vy);
@@ -298,16 +302,18 @@ function integrate(
   return { path, impact: { x, y } };
 }
 
-/** Simulate one pellet from `origin` at an angle/power. */
+/** Simulate one pellet from `origin` at an angle/power. `velocityScale` lifts or
+ *  lowers the muzzle velocity (flatness) for heavy / hyper-velocity weapons. */
 function simulatePellet(
   origin: Point,
   angleDeg: number,
   power: number,
   state: GameState,
-  terrain: number[]
+  terrain: number[],
+  velocityScale = 1
 ): { path: Point[]; impact: Point | null } {
   const rad = (angleDeg * Math.PI) / 180;
-  const speed = power * POWER_SCALE;
+  const speed = power * POWER_SCALE * velocityScale;
   return integrate(origin, Math.cos(rad) * speed, -Math.sin(rad) * speed, state, terrain);
 }
 
@@ -359,6 +365,8 @@ export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
     return rand01(rngSeed);
   };
 
+  // Per-weapon knockback strength (1 = standard).
+  const knockMul = weapon.knockback ?? 1;
   // Apply one explosion: blast-falloff damage + knockback to alive tanks, then
   // carve the crater.
   const explode = (impact: Point, radius: number, maxDamage: number, dig: number): void => {
@@ -373,13 +381,13 @@ export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
         // Push away from the epicentre, scaled by how horizontal the blast was
         // (dx/dist): a blast to the side shoves hardest, one overhead barely.
         const dirX = dist > 0.0001 ? dx / dist : 0;
-        shove.set(t.seat, (shove.get(t.seat) ?? 0) + dirX * intensity * KNOCK_SCALE);
+        shove.set(t.seat, (shove.get(t.seat) ?? 0) + dirX * intensity * KNOCK_SCALE * knockMul);
       }
     }
     carve(terrain, width, impact.x, impact.y, radius, dig);
   };
   const fire = (angle: number, power: number, from: Point = origin) =>
-    simulatePellet(from, angle, power, state, terrain);
+    simulatePellet(from, angle, power, state, terrain, weapon.velocityScale ?? 1);
   const R = weapon.blastRadius;
   const D = weapon.maxDamage;
   const G = weapon.digFactor;
@@ -389,6 +397,18 @@ export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
       for (let p = 0; p < weapon.count; p++) {
         const offset = (p - (weapon.count - 1) / 2) * (weapon.spreadDeg / Math.max(1, weapon.count - 1));
         const { path, impact } = fire(shot.angle + offset, shot.power);
+        if (impact) explode(impact, R, D, G);
+        shells.push({ path, impact, startStep: 0, weaponId: weapon.id });
+      }
+      break;
+    }
+    case "salvo": {
+      // Several slugs on the SAME angle at stepped power — they string out along
+      // the trajectory and land at staggered distances.
+      const step = weapon.powerSpread ?? 6;
+      for (let p = 0; p < weapon.count; p++) {
+        const power = Math.max(1, Math.min(100, shot.power + (p - (weapon.count - 1) / 2) * step));
+        const { path, impact } = fire(shot.angle, power);
         if (impact) explode(impact, R, D, G);
         shells.push({ path, impact, startStep: 0, weaponId: weapon.id });
       }
@@ -525,10 +545,13 @@ export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
   // Knockback: shove surviving tanks along the surface, away from the blast.
   // Wrecks (just destroyed) stay put, and a tank can't be shoved off the board
   // or into another tank.
+  // Launcher-type weapons (high knockback) can shove further; cap absolutely so
+  // nothing flies clear across the map.
+  const knockCap = Math.min(96, MAX_KNOCK * Math.max(1, knockMul));
   for (const [seat, raw] of shove) {
     const t = tanks[seat];
     if (!t.alive) continue;
-    const push = Math.max(-MAX_KNOCK, Math.min(MAX_KNOCK, raw));
+    const push = Math.max(-knockCap, Math.min(knockCap, raw));
     let nx = Math.round(t.x + push);
     nx = Math.max(0, Math.min(width - 1, nx));
     const blocked = tanks.some((o) => o.alive && o.seat !== seat && Math.abs(o.x - nx) < 20);

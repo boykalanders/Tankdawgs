@@ -90,6 +90,16 @@ interface ShockSrc {
   width: number;
 }
 
+/** A patch of fire that keeps burning after a Napalm impact. */
+interface Flame {
+  x: number;
+  y: number;
+  born: number;
+  life: number;
+}
+
+const LINGER_FRAMES = 72; // how long Napalm flames keep burning (~1.2s)
+
 /** Spawn an explosion's particles + shockwave for a weapon's FX flavour. Pushes
  *  into the live arrays and returns a screen-flash amount (0 = none). Particle
  *  counts scale with the weapon's blast radius, so a bigger affect range reads
@@ -298,6 +308,7 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
     const impacts = new Map<number, ImpactFx>(); // seat → latched hit feedback
     const particles: Particle[] = []; // debris / sparks / smoke
     const shocks: ShockSrc[] = []; // expanding shockwave rings
+    const flames: Flame[] = []; // lingering Napalm fire patches
     let shakeMag = 0; // current screen-shake amplitude (px), decays each frame
     let flashMag = 0; // full-screen white flash (huge blasts), decays each frame
     let frame = 0;
@@ -336,6 +347,7 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
             burstFired.add(i);
             bursts.push({ x: shell.impact.x, y: shell.impact.y, color: w.style.burst, radius: w.blastRadius, born: frame });
             flashMag = Math.max(flashMag, spawnExplosion(shell.impact.x, shell.impact.y, w, frame, particles, shocks));
+            if (w.style.lingerFire) flames.push({ x: shell.impact.x, y: shell.impact.y, born: frame, life: LINGER_FRAMES });
             if (!mutedRef.current) playBoom(w.blastRadius);
             // Latch hit feedback on any alive tank this blast overlapped — same
             // radius the engine used to deal the damage, so they always agree.
@@ -366,8 +378,10 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
       for (const im of impacts.values()) {
         const cur = displayedRef.current[im.seat] ?? pre.tanks[im.seat].x;
         const dx = im.toX - cur;
-        displayedRef.current[im.seat] =
-          Math.abs(dx) > KNOCK_SPEED ? cur + Math.sign(dx) * KNOCK_SPEED : im.toX;
+        // Slide to the knocked position; bigger shoves slide faster so a launch
+        // and a nudge both settle in roughly the same beat.
+        const slide = Math.max(KNOCK_SPEED, Math.abs(im.toX - pre.tanks[im.seat].x) / 12);
+        displayedRef.current[im.seat] = Math.abs(dx) > slide ? cur + Math.sign(dx) * slide : im.toX;
         const age = frame - im.born;
         const drain = Math.min(1, age / DRAIN_FRAMES);
         const health = im.preHealth + (im.postHealth - im.preHealth) * drain;
@@ -410,6 +424,37 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
         })
         .filter((s) => s.alpha > 0);
 
+      // Lingering Napalm fire — keeps spitting embers and glowing until it burns
+      // out. Build render-ready flames (intensity fades over their life).
+      const fires: { x: number; y: number; intensity: number }[] = [];
+      for (let i = flames.length - 1; i >= 0; i--) {
+        const fl = flames[i];
+        const age = frame - fl.born;
+        if (age >= fl.life) {
+          flames.splice(i, 1);
+          continue;
+        }
+        const intensity = 1 - age / fl.life;
+        fires.push({ x: fl.x, y: fl.y, intensity });
+        // Spit a rising ember now and then.
+        if (Math.random() < 0.6) {
+          const ml = Math.round(14 + Math.random() * 16);
+          particles.push({
+            x: fl.x + (Math.random() * 2 - 1) * 7,
+            y: fl.y - Math.random() * 4,
+            vx: (Math.random() * 2 - 1) * 0.7,
+            vy: -(0.6 + Math.random() * 1.4),
+            grav: -0.012,
+            life: ml,
+            maxLife: ml,
+            size: 1 + Math.random() * 2,
+            grow: 0,
+            color: ["#ffd24a", "#ff7a1f", "#ff4a10"][(Math.random() * 3) | 0],
+            shape: "spark",
+          });
+        }
+      }
+
       const live = bursts.filter((b) => frame - b.born < FADE);
       const recoil = Math.max(0, 1 - frame / 7); // 0..1 over the first ~7 frames
 
@@ -429,20 +474,23 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
           popups,
           particles,
           rings,
+          fires,
+          fireSeed: frame,
           flash: flashMag,
         },
         (seat) => displayedRef.current[seat] ?? pre.tanks[seat].x
       );
 
       const flying = shells.some((s) => simStep < s.startStep + s.path.length - 1);
-      // Hold the frame open until shells land, blasts fade, debris settles, the
-      // knockback slides finish and the last damage number has risen away.
+      // Hold the frame open until shells land, blasts fade, debris settles,
+      // lingering fire burns out, knockback slides finish and the last damage
+      // number has risen away.
       const settling = [...impacts.values()].some(
         (im) =>
           Math.abs((displayedRef.current[im.seat] ?? im.toX) - im.toX) > 0.5 ||
           (im.amount > 0 && frame - im.born < POPUP_FRAMES)
       );
-      if (!flying && live.length === 0 && particles.length === 0 && !settling) {
+      if (!flying && live.length === 0 && particles.length === 0 && flames.length === 0 && !settling) {
         rafRef.current = null;
         onAnimationEnd?.();
         return;
@@ -484,6 +532,10 @@ interface Overlay {
   particles?: Particle[];
   /** Expanding shockwave rings (render-ready). */
   rings?: { x: number; y: number; r: number; alpha: number; color: string; width: number }[];
+  /** Lingering Napalm fire patches (intensity fades as they burn out). */
+  fires?: { x: number; y: number; intensity: number }[];
+  /** Frame counter, so fire flicker animates over time. */
+  fireSeed?: number;
   /** Full-screen white flash for huge blasts (0 = none). */
   flash?: number;
 }
@@ -604,6 +656,23 @@ function drawScene(
     ctx.beginPath();
     ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
     ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // Lingering Napalm fire — a flickering glow at the base, embers handled by the
+  // particle layer above this.
+  for (const f of overlay.fires ?? []) {
+    const flick = 0.75 + 0.25 * Math.sin(f.x * 0.5 + (overlay.fireSeed ?? 0));
+    const r = (10 + 9 * f.intensity) * flick;
+    ctx.globalAlpha = Math.min(0.85, f.intensity + 0.15);
+    const g = ctx.createRadialGradient(f.x, f.y, 1, f.x, f.y, r);
+    g.addColorStop(0, "rgba(255,240,180,0.95)");
+    g.addColorStop(0.45, "rgba(255,120,30,0.8)");
+    g.addColorStop(1, "rgba(120,20,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(f.x, f.y - r * 0.3, r * 0.7, r, 0, 0, Math.PI * 2);
+    ctx.fill();
     ctx.globalAlpha = 1;
   }
 
