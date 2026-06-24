@@ -55,6 +55,10 @@ export interface GameState {
   /** Winning seat once gameOver (null on a mutual KO / draw). */
   winner: number | null;
   moveCount: number;
+  /** Remaining ammunition per seat per weapon: `ammo[seat][weaponId]`. Weapons
+   *  absent from a seat's map are unlimited (the default Shell). Decrements as a
+   *  seat fires a limited weapon; at 0 the weapon can't be fired. */
+  ammo: Record<number, Record<string, number>>;
 }
 
 /** A fired shot: barrel angle, power, and the chosen weapon. */
@@ -123,6 +127,9 @@ export interface WeaponStyle {
   burst: string;
   /** Shell radius in world units. */
   shellRadius: number;
+  /** In-flight projectile silhouette so the incoming round is recognisable.
+   *  Defaults to "round". */
+  shellShape?: "round" | "heavy" | "dart" | "drill" | "warhead" | "piston";
   /** Explosion flavour — picks the particle style (debris, fire, sparks…).
    *  Defaults to "blast" when omitted. */
   fx?: BlastFx;
@@ -152,6 +159,9 @@ export interface Weapon {
   spreadDeg: number;
   /** Power step between salvo slugs (kind "salvo"); ignored otherwise. */
   powerSpread?: number;
+  /** Starting ammunition per player for this weapon. Omit for unlimited
+   *  (the default Shell). Every other weapon should be limited. */
+  ammo?: number;
   /** Muzzle-velocity multiplier — high = flatter, faster (e.g. Railgun);
    *  low = a heavier, loftier arc (e.g. Big Shot). Defaults to 1. */
   velocityScale?: number;

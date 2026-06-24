@@ -7,7 +7,7 @@ import type {
   ShotResult,
   Tank,
 } from "./types.js";
-import { weaponById, DEFAULT_WEAPON } from "./weapons.js";
+import { weaponById, DEFAULT_WEAPON, initialAmmo } from "./weapons.js";
 
 // ─────────────────────────── world constants ───────────────────────────
 export const WORLD_WIDTH = 1200;
@@ -34,6 +34,9 @@ const MAX_STEPS = 3000;
 // with how side-on the blast was — a hit directly overhead barely budges it.
 const KNOCK_SCALE = 0.5; // world-units of slide per point of blast intensity
 const MAX_KNOCK = 38; // cap the total shove per tank per shot
+
+// Sim-steps between successive salvo slugs leaving the barrel (Railgun burst).
+const SALVO_STAGGER = 10;
 const MUZZLE_RISE = 16; // launch this far above the tank's surface
 const TANK_BODY = 8; // half-height of a tank body (for hit/centre)
 const TANK_HIT_RADIUS = 14; // a pellet striking within this hits the tank
@@ -141,6 +144,9 @@ export function createInitialState(opts: InitOptions): GameState {
   }
 
   const windSeed = nextSeed(opts.seed ^ 0x9e3779b9);
+  // Every seat starts with the same limited loadout (Shell stays unlimited).
+  const ammo: Record<number, Record<string, number>> = {};
+  for (const t of tanks) ammo[t.seat] = initialAmmo();
   return {
     width,
     height,
@@ -154,6 +160,7 @@ export function createInitialState(opts: InitOptions): GameState {
     gameOver: false,
     winner: null,
     moveCount: 0,
+    ammo,
   };
 }
 
@@ -195,6 +202,13 @@ export function validateShot(
     return { ok: false, reason: "power must be 1–100" };
   }
   if (!weaponById(shot.weaponId)) return { ok: false, reason: "unknown weapon" };
+  // Limited weapons need ammo left for the seat on turn. Unknown ids fall back
+  // to the unlimited Shell, so resolve through weaponById first.
+  const weapon = weaponById(shot.weaponId);
+  const remaining = state.ammo?.[state.turn]?.[weapon.id];
+  if (remaining != null && remaining <= 0) {
+    return { ok: false, reason: `out of ${weapon.name}` };
+  }
   return { ok: true };
 }
 
@@ -403,14 +417,15 @@ export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
       break;
     }
     case "salvo": {
-      // Several slugs on the SAME angle at stepped power — they string out along
-      // the trajectory and land at staggered distances.
+      // Rapid-fire: several slugs on the SAME angle at stepped power, each
+      // leaving the barrel a beat after the last (SALVO_STAGGER sim-steps), so
+      // they read as a quick burst and land at staggered distances.
       const step = weapon.powerSpread ?? 6;
       for (let p = 0; p < weapon.count; p++) {
         const power = Math.max(1, Math.min(100, shot.power + (p - (weapon.count - 1) / 2) * step));
         const { path, impact } = fire(shot.angle, power);
         if (impact) explode(impact, R, D, G);
-        shells.push({ path, impact, startStep: 0, weaponId: weapon.id });
+        shells.push({ path, impact, startStep: p * SALVO_STAGGER, weaponId: weapon.id });
       }
       break;
     }
@@ -567,6 +582,16 @@ export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
   const winningTeam = gameOver && aliveTeams.size === 1 ? [...aliveTeams][0] : null;
   const winner = winningTeam !== null ? aliveAfter[0].seat : null;
 
+  // Spend one round of ammo if the fired weapon is limited (Shell is unlimited).
+  let ammo = state.ammo;
+  const seatAmmo = state.ammo[state.turn];
+  if (seatAmmo && weapon.id in seatAmmo) {
+    ammo = {
+      ...state.ammo,
+      [state.turn]: { ...seatAmmo, [weapon.id]: Math.max(0, seatAmmo[weapon.id] - 1) },
+    };
+  }
+
   const advancedSeed = nextSeed(state.seed);
   const base: GameState = {
     ...state,
@@ -575,6 +600,7 @@ export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
     gameOver,
     winner,
     moveCount: state.moveCount + 1,
+    ammo,
   };
   const endState: GameState = gameOver
     ? { ...base, turn: state.turn, wind: state.wind, seed: advancedSeed }

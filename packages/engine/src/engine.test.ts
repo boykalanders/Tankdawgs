@@ -126,11 +126,29 @@ describe("artillery engine — firing", () => {
     }
   });
 
-  it("a salvo fires several slugs at stepped power", () => {
+  it("a railgun salvo rapid-fires several slugs in a staggered burst", () => {
     const s = init(2);
     const res = simulateShot(s, { angle: 45, power: 55, weaponId: "railgun" });
     expect(res.shells).toHaveLength(3);
-    expect(res.shells.every((sh) => sh.startStep === 0)).toBe(true);
+    // First slug leaves at once; the rest are staggered (a burst over time).
+    const starts = res.shells.map((sh) => sh.startStep);
+    expect(starts[0]).toBe(0);
+    expect(new Set(starts).size).toBe(3); // each launches at a distinct time
+    expect(Math.max(...starts)).toBeGreaterThan(0);
+  });
+
+  it("limits special-weapon ammo but leaves the Shell unlimited", () => {
+    const s = init(2);
+    // Shell is unlimited — not tracked in the ammo map.
+    expect(s.ammo[0].shell).toBeUndefined();
+    expect(validateShot(s, { angle: 45, power: 50, weaponId: "shell" }).ok).toBe(true);
+    // Nuke starts at 1 round; firing it spends it.
+    expect(s.ammo[0].nuke).toBe(1);
+    const res = simulateShot(s, { angle: 90, power: 50, weaponId: "nuke" });
+    expect(res.endState.ammo[0].nuke).toBe(0);
+    // Out of ammo → can't fire it again on that seat's turn.
+    const depleted = { ...res.endState, turn: 0, gameOver: false };
+    expect(validateShot(depleted, { angle: 90, power: 50, weaponId: "nuke" }).ok).toBe(false);
   });
 
   it("a side-on blast knocks a surviving tank away from the epicentre", () => {

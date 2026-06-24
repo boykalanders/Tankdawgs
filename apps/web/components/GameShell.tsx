@@ -111,8 +111,21 @@ export default function GameShell({
     }
   }, [chat?.messages.length, chatOpen]);
 
+  // Remaining ammo for the seat that's firing (the Shell is unlimited).
+  const myAmmo = mySeat != null ? state.ammo?.[mySeat] : undefined;
+  const ammoLeft = (w: { id: string; ammo?: number }) =>
+    w.ammo == null ? null : myAmmo?.[w.id] ?? w.ammo;
+
+  // If the chosen weapon runs dry, fall back to the unlimited Shell.
+  useEffect(() => {
+    const w = weaponById(weaponId);
+    if (w.ammo != null && (myAmmo?.[w.id] ?? w.ammo) <= 0) setWeaponId(DEFAULT_WEAPON);
+  }, [weaponId, myAmmo]);
+
   function fire() {
     if (!interactive) return;
+    const left = ammoLeft(weaponById(weaponId));
+    if (left != null && left <= 0) return; // out of ammo
     onFire({ angle, power, weaponId });
   }
 
@@ -238,14 +251,18 @@ export default function GameShell({
             <div className="flex flex-wrap gap-1.5">
               {WEAPON_LIST.map((w) => {
                 const active = w.id === weaponId;
+                const left = ammoLeft(w);
+                const depleted = left != null && left <= 0;
                 return (
                   <button
                     key={w.id}
                     type="button"
-                    disabled={!interactive}
+                    disabled={!interactive || depleted}
                     onClick={() => setWeaponId(w.id)}
-                    title={w.blurb}
+                    title={depleted ? `${w.name} — out of ammo` : w.blurb}
                     className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                      depleted ? "line-through" : ""
+                    } ${
                       active
                         ? "border-gold bg-gold/15 text-gold-bright shadow-gold-glow"
                         : "border-gold-dim/30 bg-mahogany-deep text-cream/70 enabled:hover:border-gold/60 enabled:hover:text-gold-bright"
@@ -253,6 +270,13 @@ export default function GameShell({
                   >
                     <span className="h-2.5 w-2.5 rounded-full" style={{ background: w.style.shell }} />
                     {w.name}
+                    <span
+                      className={`ml-0.5 tabular-nums text-[10px] font-bold ${
+                        left == null ? "text-cream/35" : depleted ? "text-cream/35" : "text-gold-bright/85"
+                      }`}
+                    >
+                      {left == null ? "∞" : `×${left}`}
+                    </span>
                   </button>
                 );
               })}

@@ -98,6 +98,17 @@ interface Flame {
   life: number;
 }
 
+type ShellShape = "round" | "heavy" | "dart" | "drill" | "warhead" | "piston";
+
+/** A shell in flight — position, colour, size, silhouette and heading. */
+interface Head {
+  p: Point;
+  color: string;
+  r: number;
+  shape: ShellShape;
+  angle: number; // travel direction (radians)
+}
+
 const LINGER_FRAMES = 72; // how long Napalm flames keep burning (~1.2s)
 
 /** Spawn an explosion's particles + shockwave for a weapon's FX flavour. Pushes
@@ -305,6 +316,7 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
     const FADE = 26; // explosion fade in frames
     const bursts: Burst[] = [];
     const burstFired = new Set<number>();
+    const launched = new Set<number>(); // shells that have left the barrel
     const impacts = new Map<number, ImpactFx>(); // seat → latched hit feedback
     const particles: Particle[] = []; // debris / sparks / smoke
     const shocks: ShockSrc[] = []; // expanding shockwave rings
@@ -323,12 +335,21 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
     const tick = () => {
       frame += 1;
       const simStep = frame * stepPerFrame;
-      const heads: { p: Point; color: string; r: number }[] = [];
+      const heads: Head[] = [];
       const trails: { pts: Point[]; color: string }[] = [];
 
       shells.forEach((shell, i) => {
         if (simStep < shell.startStep) return; // not launched yet
         const w = weaponById(shell.weaponId);
+        // Muzzle re-flash + report for each rapid-fire salvo slug as it launches.
+        if (!launched.has(i)) {
+          launched.add(i);
+          if (shell.startStep > 0 && w.kind === "salvo") {
+            const m = shell.path[0];
+            bursts.push({ x: m.x, y: m.y, color: w.style.burst, radius: 8, born: frame });
+            if (!mutedRef.current) playFire();
+          }
+        }
         const local = simStep - shell.startStep; // fractional steps along the path
         const lastIdx = shell.path.length - 1;
         if (local < lastIdx) {
@@ -340,7 +361,13 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
           const b = shell.path[Math.min(i0 + 1, lastIdx)];
           const p = { x: a.x + (b.x - a.x) * frac, y: a.y + (b.y - a.y) * frac };
           trails.push({ pts: shell.path.slice(0, i0 + 1).concat(p), color: w.style.trail });
-          heads.push({ p, color: w.style.shell, r: w.style.shellRadius });
+          heads.push({
+            p,
+            color: w.style.shell,
+            r: w.style.shellRadius,
+            shape: w.style.shellShape ?? "round",
+            angle: Math.atan2(b.y - a.y, b.x - a.x),
+          });
         } else {
           trails.push({ pts: shell.path, color: w.style.trail });
           if (shell.impact && !burstFired.has(i)) {
@@ -517,7 +544,7 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
 }
 
 interface Overlay {
-  heads: { p: Point; color: string; r: number }[];
+  heads: Head[];
   trails: { pts: Point[]; color: string }[];
   bursts: { x: number; y: number; color: string; radius: number; age?: number }[];
   /** 0 = at rest, 1 = full recoil (applied to the seat on turn). */
@@ -538,6 +565,145 @@ interface Overlay {
   fireSeed?: number;
   /** Full-screen white flash for huge blasts (0 = none). */
   flash?: number;
+}
+
+/** Draw a shell in flight with a recognisable, heading-oriented silhouette so a
+ *  player can read the incoming round on sight. */
+function drawShell(ctx: CanvasRenderingContext2D, h: Head): void {
+  const { p, color, r, shape, angle } = h;
+
+  // Soft glow behind every shell.
+  const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3.2);
+  glow.addColorStop(0, color);
+  glow.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r * 3.2, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate(angle);
+
+  switch (shape) {
+    case "dart": {
+      // Slender needle with a white-hot tip (Sniper / Railgun).
+      const len = r * 5.5;
+      const w = r * 0.85;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(len * 0.6, 0);
+      ctx.lineTo(-len * 0.4, w);
+      ctx.lineTo(-len * 0.4, -w);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(len * 0.45, 0, w, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case "heavy": {
+      // Fat iron round with a tail fin and a hot highlight (Big Shot).
+      ctx.fillStyle = "#26242a";
+      ctx.beginPath();
+      ctx.moveTo(-r * 1.3, 0);
+      ctx.lineTo(-r * 2.4, -r);
+      ctx.lineTo(-r * 2.4, r);
+      ctx.closePath();
+      ctx.fill();
+      const body = ctx.createRadialGradient(-r * 0.4, -r * 0.4, r * 0.2, 0, 0, r * 1.3);
+      body.addColorStop(0, "#ffffff");
+      body.addColorStop(0.4, color);
+      body.addColorStop(1, "#7a4a1a");
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 1.25, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case "warhead": {
+      // Finned missile with a red nose and a pulsing warning halo (Nuke).
+      const len = r * 3.2;
+      const w = r * 0.95;
+      ctx.fillStyle = "rgba(255,40,30,0.3)";
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 2.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#9aa3af"; // tail fins
+      ctx.beginPath();
+      ctx.moveTo(-len * 0.7, -w);
+      ctx.lineTo(-len, -w * 1.9);
+      ctx.lineTo(-len * 0.45, -w * 0.4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-len * 0.7, w);
+      ctx.lineTo(-len, w * 1.9);
+      ctx.lineTo(-len * 0.45, w * 0.4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#dfe4e9"; // body
+      ctx.beginPath();
+      ctx.moveTo(len * 0.45, -w);
+      ctx.lineTo(-len * 0.7, -w);
+      ctx.lineTo(-len * 0.7, w);
+      ctx.lineTo(len * 0.45, w);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#e0402a"; // red nose cone
+      ctx.beginPath();
+      ctx.moveTo(len, 0);
+      ctx.lineTo(len * 0.45, -w);
+      ctx.lineTo(len * 0.45, w);
+      ctx.closePath();
+      ctx.fill();
+      break;
+    }
+    case "drill": {
+      // Auger cone with grooves, biting forward (Digger).
+      const len = r * 3;
+      const w = r;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(len, 0);
+      ctx.lineTo(-len * 0.5, -w);
+      ctx.lineTo(-len * 0.5, w);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "rgba(40,28,12,0.7)";
+      ctx.lineWidth = Math.max(1, r * 0.3);
+      for (let i = -1; i <= 1; i++) {
+        ctx.beginPath();
+        ctx.moveTo(len * 0.4 + i * r * 0.9, -w * 0.6);
+        ctx.lineTo(len * 0.1 + i * r * 0.9, w * 0.6);
+        ctx.stroke();
+      }
+      break;
+    }
+    case "piston": {
+      // Blocky industrial slug with a bright flat head (Jackhammer).
+      const len = r * 2.4;
+      const w = r * 1.05;
+      ctx.fillStyle = "#34302a";
+      ctx.fillRect(-len * 0.6, -w, len * 1.2, w * 2);
+      const cap = ctx.createLinearGradient(0, -w, 0, w);
+      cap.addColorStop(0, "#ffffff");
+      cap.addColorStop(0.5, color);
+      cap.addColorStop(1, "#7a5a2a");
+      ctx.fillStyle = cap;
+      ctx.fillRect(len * 0.2, -w * 1.2, len * 0.5, w * 2.4);
+      break;
+    }
+    default: {
+      // Plain bright ball (Shell and most weapons).
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
 }
 
 function drawScene(
@@ -618,35 +784,39 @@ function drawScene(
     ctx.stroke();
     ctx.globalAlpha = 1;
   }
-  for (const h of overlay.heads) {
-    const glow = ctx.createRadialGradient(h.p.x, h.p.y, 0, h.p.x, h.p.y, h.r * 3);
-    glow.addColorStop(0, h.color);
-    glow.addColorStop(1, "rgba(0,0,0,0)");
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(h.p.x, h.p.y, h.r * 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#fff";
-    ctx.beginPath();
-    ctx.arc(h.p.x, h.p.y, h.r, 0, Math.PI * 2);
-    ctx.fill();
-  }
+  for (const h of overlay.heads) drawShell(ctx, h);
 
-  // Explosions — bright core flash.
+  // Explosions — Pocket Tanks-style: a bright saturated bloom that pops out fast
+  // (ease-out) over a white-hot core, drawn additively so it really glows.
+  ctx.globalCompositeOperation = "lighter";
   for (const b of overlay.bursts) {
-    const age = b.age ?? 0;
-    const r = b.radius * (0.4 + age * 0.9);
-    ctx.globalAlpha = 1 - age;
-    const g = ctx.createRadialGradient(b.x, b.y, 2, b.x, b.y, r);
+    const age = b.age ?? 0; // 0..1 over the blast's life
+    const ease = 1 - (1 - age) * (1 - age); // fast expansion, easing out
+    const R = b.radius * (0.55 + ease * 0.7); // pops to ~1.25× the affect range
+    const fade = 1 - age;
+    // Coloured bloom.
+    ctx.globalAlpha = fade * 0.9;
+    const g = ctx.createRadialGradient(b.x, b.y, 1, b.x, b.y, R);
     g.addColorStop(0, "rgba(255,255,255,0.95)");
-    g.addColorStop(0.4, b.color);
+    g.addColorStop(0.35, b.color);
+    g.addColorStop(0.72, b.color);
     g.addColorStop(1, "rgba(0,0,0,0)");
     ctx.fillStyle = g;
     ctx.beginPath();
-    ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+    ctx.arc(b.x, b.y, R, 0, Math.PI * 2);
     ctx.fill();
-    ctx.globalAlpha = 1;
+    // White-hot core that collapses as it fades.
+    const core = b.radius * (0.5 - age * 0.4);
+    if (core > 0) {
+      ctx.globalAlpha = fade;
+      ctx.fillStyle = "rgba(255,252,235,0.95)";
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, core, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = 1;
 
   // Shockwave rings expanding out of each blast.
   for (const s of overlay.rings ?? []) {
