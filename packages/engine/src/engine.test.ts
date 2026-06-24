@@ -137,11 +137,13 @@ describe("artillery engine — firing", () => {
     expect(Math.max(...starts)).toBeGreaterThan(0);
   });
 
-  it("limits special-weapon ammo but leaves the Shell unlimited", () => {
+  it("limits special-weapon ammo but leaves the normal Bullet unlimited", () => {
     const s = init(2);
-    // Shell is unlimited — not tracked in the ammo map.
-    expect(s.ammo[0].shell).toBeUndefined();
-    expect(validateShot(s, { angle: 45, power: 50, weaponId: "shell" }).ok).toBe(true);
+    // The Bullet is the unlimited fallback — not tracked in the ammo map.
+    expect(s.ammo[0].bullet).toBeUndefined();
+    expect(validateShot(s, { angle: 45, power: 50, weaponId: "bullet" }).ok).toBe(true);
+    // The Shell is now a limited artillery shell.
+    expect(s.ammo[0].shell).toBe(3);
     // Nuke starts at 1 round; firing it spends it.
     expect(s.ammo[0].nuke).toBe(1);
     const res = simulateShot(s, { angle: 90, power: 50, weaponId: "nuke" });
@@ -149,6 +151,16 @@ describe("artillery engine — firing", () => {
     // Out of ammo → can't fire it again on that seat's turn.
     const depleted = { ...res.endState, turn: 0, gameOver: false };
     expect(validateShot(depleted, { angle: 90, power: 50, weaponId: "nuke" }).ok).toBe(false);
+  });
+
+  it("jackhammer pounds its impact several times in a staggered burst", () => {
+    const s = init(2);
+    const res = simulateShot(s, { angle: 80, power: 45, weaponId: "jackhammer" });
+    // 1 landing + (count-1) follow-up blows, staggered after it lands.
+    expect(res.shells).toHaveLength(4);
+    const blows = res.shells.filter((sh) => sh.startStep > 0);
+    expect(blows.length).toBe(3);
+    expect(new Set(blows.map((sh) => sh.startStep)).size).toBe(3); // each blow is staggered
   });
 
   it("a side-on blast knocks a surviving tank away from the epicentre", () => {

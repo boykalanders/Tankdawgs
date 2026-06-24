@@ -111,8 +111,10 @@ export interface ShotResult {
  *  • cluster — one shell that splits into `count` bomblets on impact.
  *  • mirv    — one shell that splits into `count` warheads at the apex.
  *  • roller  — one shell that rolls downhill before exploding.
- *  • napalm  — one shell that spreads a burning strip across the terrain. */
-export type WeaponKind = "single" | "fan" | "salvo" | "cluster" | "mirv" | "roller" | "napalm";
+ *  • napalm  — one shell that spreads a burning strip across the terrain.
+ *  • hammer  — one shell that pounds its impact `count` times in quick
+ *              succession (Jackhammer), each blow damaging + shoving. */
+export type WeaponKind = "single" | "fan" | "salvo" | "cluster" | "mirv" | "roller" | "napalm" | "hammer";
 
 /** Explosion flavour driving the renderer's impact particle FX. */
 export type BlastFx = "blast" | "fire" | "dirt" | "spark" | "plasma" | "frost";
@@ -123,13 +125,17 @@ export interface WeaponStyle {
   shell: string;
   /** Trail colour. */
   trail: string;
+  /** In-flight trail style (renderer): "line" (default tapered streak), "glow"
+   *  (additive comet, for energy/ice), "smoke" (missile contrail), "spark"
+   *  (sparkle trail), "ember" (fiery trail). */
+  trailStyle?: "line" | "glow" | "smoke" | "spark" | "ember";
   /** Explosion core colour. */
   burst: string;
   /** Shell radius in world units. */
   shellRadius: number;
   /** In-flight projectile silhouette so the incoming round is recognisable.
    *  Defaults to "round". */
-  shellShape?: "round" | "heavy" | "dart" | "drill" | "warhead" | "piston";
+  shellShape?: "round" | "shell" | "heavy" | "dart" | "drill" | "warhead" | "piston";
   /** Explosion flavour — picks the particle style (debris, fire, sparks…).
    *  Defaults to "blast" when omitted. */
   fx?: BlastFx;

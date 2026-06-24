@@ -22,7 +22,9 @@ export const WORLD_HEIGHT = 600;
 // as it falls — but, having shed energy to drag, it always strikes BELOW its
 // muzzle velocity. High power ⇒ high muzzle velocity ⇒ a flatter, faster path.
 const GRAVITY = 0.32; // downward accel per step² (y grows down)
-const POWER_SCALE = 0.3; // power 1–100 → muzzle speed 0.3–30 units/step
+// Tuned so a full cross-field 1v1 shot lands at ~80–88 power (a strong shot, not
+// a maxed one) and typical shots hit in the 70–90 band, rather than needing ~100.
+const POWER_SCALE = 0.34; // power 1–100 → muzzle speed 0.34–34 units/step
 const WIND_ACCEL = 0.03; // horizontal accel per step at |wind| = 1
 const DRAG = 0.0009; // quadratic air-drag coefficient (accel = DRAG·speed²)
 const SUBSTEPS = 3; // integration sub-steps per recorded path point
@@ -37,6 +39,8 @@ const MAX_KNOCK = 38; // cap the total shove per tank per shot
 
 // Sim-steps between successive salvo slugs leaving the barrel (Railgun burst).
 const SALVO_STAGGER = 10;
+// Sim-steps between Jackhammer blows pounding the same spot.
+const HAMMER_STAGGER = 9;
 const MUZZLE_RISE = 16; // launch this far above the tank's surface
 const TANK_BODY = 8; // half-height of a tank body (for hit/centre)
 const TANK_HIT_RADIUS = 14; // a pellet striking within this hits the tank
@@ -126,7 +130,9 @@ export function createInitialState(opts: InitOptions): GameState {
   const teamSize = opts.teamSize && opts.teamSize >= 2 ? opts.teamSize : 0;
   const terrain = generateTerrain(width, opts.seed);
 
-  const margin = Math.round(width * 0.08);
+  // Spawn margin from each edge. A touch wider than before so the full-field
+  // separation is a bit shorter — keeps long shots in the 70–90 power band.
+  const margin = Math.round(width * 0.1);
   const span = width - margin * 2;
   const tanks: Tank[] = [];
   for (let i = 0; i < n; i++) {
@@ -530,6 +536,29 @@ export function simulateShot(state: GameState, shot: ShotInput): ShotResult {
             path: [{ x: primary.impact.x, y: primary.impact.y }, { x: fx, y: fy }],
             impact: { x: fx, y: fy },
             startStep: at,
+            weaponId: weapon.id,
+          });
+        }
+      }
+      break;
+    }
+    case "hammer": {
+      // The round lands, then pounds the spot `count` times in quick succession
+      // — each blow damages and shoves, so the accumulated knockback launches the
+      // target while each individual hit stays light.
+      const primary = fire(shot.angle, shot.power);
+      shells.push({ path: primary.path, impact: primary.impact, startStep: 0, weaponId: weapon.id });
+      if (primary.impact) {
+        explode(primary.impact, R, D, G); // first blow on landing
+        const at = primary.path.length;
+        for (let i = 1; i < weapon.count; i++) {
+          const jx = clampX(primary.impact.x + (rng() * 2 - 1) * 5, width); // tiny jitter
+          const pt: Point = { x: jx, y: terrain[jx] - 2 };
+          explode(pt, R, D, G);
+          shells.push({
+            path: [{ x: primary.impact.x, y: primary.impact.y }, pt],
+            impact: pt,
+            startStep: at + i * HAMMER_STAGGER,
             weaponId: weapon.id,
           });
         }

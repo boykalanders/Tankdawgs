@@ -98,7 +98,8 @@ interface Flame {
   life: number;
 }
 
-type ShellShape = "round" | "heavy" | "dart" | "drill" | "warhead" | "piston";
+type ShellShape = "round" | "shell" | "heavy" | "dart" | "drill" | "warhead" | "piston";
+type TrailStyle = "line" | "glow" | "smoke" | "spark" | "ember";
 
 /** A shell in flight — position, colour, size, silhouette and heading. */
 interface Head {
@@ -179,7 +180,8 @@ function spawnExplosion(
   switch (fx) {
     case "fire":
       ring(1.6, 16, "#ffb86a", 0.08);
-      emit(Math.round(18 * dens), "spark", [1.2, 4.5], [16, 34], [1.5, 3], 0.05, ["#ffd24a", "#ff7a1f", "#ff4a10", "#ffae3a"], 0, "plume");
+      // Tall fountain of flame: lots of fast upward embers + a few slow ones.
+      emit(Math.round(22 * dens), "spark", [2, 6.5], [16, 36], [1.5, 3.2], 0.04, ["#ffd24a", "#ff7a1f", "#ff4a10", "#ffae3a"], 0, "plume");
       emit(Math.round(7 * dens), "smoke", [0.3, 1.2], [34, 56], [6, 12], -0.015, [smoke, "#1c1814"], 0.5, "plume");
       break;
     case "dirt":
@@ -189,13 +191,15 @@ function spawnExplosion(
       break;
     case "spark":
       ring(1.9, 12, shell, 0.05);
-      emit(Math.round(22 * dens), "spark", [3, 8], [8, 18], [1, 2.4], 0.12, ["#ffffff", shell, burst], 0, "radial");
+      // Crisp radial starburst — long fast streaks shooting out in all directions.
+      emit(Math.round(26 * dens), "spark", [4, 11], [9, 20], [1, 2.4], 0.08, ["#ffffff", shell, burst], 0, "radial");
       emit(Math.round(3 * dens), "smoke", [0.2, 0.8], [18, 30], [3, 6], -0.01, [smoke], 0.4, "plume");
       break;
     case "plasma":
       ring(2.6, 14, "#bdf6ff", 0.1);
       ring(1.5, 10, "#ffffff", 0.05);
-      emit(Math.round(24 * dens), "spark", [3.5, 9], [8, 20], [1, 2.6], 0.05, ["#ffffff", "#aef6ff", "#39d6ff", "#7fd8ff"], 0, "radial");
+      // Electric starburst, faster and brighter than a normal spark.
+      emit(Math.round(30 * dens), "spark", [4.5, 12.5], [9, 22], [1, 2.6], 0.04, ["#ffffff", "#aef6ff", "#39d6ff", "#7fd8ff"], 0, "radial");
       break;
     case "frost":
       ring(2, 22, "#eafaff", 0.08);
@@ -213,6 +217,45 @@ function spawnExplosion(
       emit(Math.round(6 * dens), "spark", [3, 7], [8, 16], [1, 2.2], 0.1, ["#ffffff", burst], 0, "radial");
   }
   return flash;
+}
+
+/** Drop a trail particle behind a flying shell for styles that need one — a
+ *  contrail (smoke), a fiery wake (ember) or a sparkle wake (spark). Pocket
+ *  Tanks-style; "line"/"glow" rely on the drawn comet instead. */
+function spawnTrail(
+  style: NonNullable<Weapon["style"]["trailStyle"]>,
+  p: Point,
+  color: string,
+  frame: number,
+  particles: Particle[]
+): void {
+  const r = Math.random;
+  if (style === "smoke") {
+    if (frame % 2 !== 0) return; // a puff every other frame → contrail
+    const ml = Math.round(28 + r() * 18);
+    particles.push({
+      x: p.x + (r() * 2 - 1) * 2, y: p.y + (r() * 2 - 1) * 2,
+      vx: (r() * 2 - 1) * 0.25, vy: -(0.15 + r() * 0.35), grav: -0.004,
+      life: ml, maxLife: ml, size: 2.5 + r() * 2, grow: 0.18, color: "#9a958c", shape: "smoke",
+    });
+  } else if (style === "ember") {
+    if (r() < 0.4) return;
+    const ml = Math.round(12 + r() * 12);
+    particles.push({
+      x: p.x + (r() * 2 - 1) * 2, y: p.y,
+      vx: (r() * 2 - 1) * 0.5, vy: -(0.2 + r() * 0.7), grav: -0.01,
+      life: ml, maxLife: ml, size: 1 + r() * 1.6, grow: 0,
+      color: ["#ffd24a", "#ff7a1f", "#ff4a10"][(r() * 3) | 0], shape: "spark",
+    });
+  } else if (style === "spark") {
+    if (r() < 0.45) return;
+    const ml = Math.round(8 + r() * 10);
+    particles.push({
+      x: p.x + (r() * 2 - 1) * 1.5, y: p.y + (r() * 2 - 1) * 1.5,
+      vx: (r() * 2 - 1) * 0.6, vy: (r() * 2 - 1) * 0.6, grav: 0.02,
+      life: ml, maxLife: ml, size: 0.8 + r() * 1.4, grow: 0, color, shape: "spark",
+    });
+  }
 }
 
 /** Per-seat impact feedback, latched when a blast first overlaps a tank. */
@@ -336,7 +379,7 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
       frame += 1;
       const simStep = frame * stepPerFrame;
       const heads: Head[] = [];
-      const trails: { pts: Point[]; color: string }[] = [];
+      const trails: { pts: Point[]; color: string; style: TrailStyle }[] = [];
 
       shells.forEach((shell, i) => {
         if (simStep < shell.startStep) return; // not launched yet
@@ -360,7 +403,8 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
           const a = shell.path[i0];
           const b = shell.path[Math.min(i0 + 1, lastIdx)];
           const p = { x: a.x + (b.x - a.x) * frac, y: a.y + (b.y - a.y) * frac };
-          trails.push({ pts: shell.path.slice(0, i0 + 1).concat(p), color: w.style.trail });
+          const tstyle = w.style.trailStyle ?? "line";
+          trails.push({ pts: shell.path.slice(0, i0 + 1).concat(p), color: w.style.trail, style: tstyle });
           heads.push({
             p,
             color: w.style.shell,
@@ -368,8 +412,9 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
             shape: w.style.shellShape ?? "round",
             angle: Math.atan2(b.y - a.y, b.x - a.x),
           });
+          spawnTrail(tstyle, p, w.style.trail, frame, particles);
         } else {
-          trails.push({ pts: shell.path, color: w.style.trail });
+          trails.push({ pts: shell.path, color: w.style.trail, style: w.style.trailStyle ?? "line" });
           if (shell.impact && !burstFired.has(i)) {
             burstFired.add(i);
             bursts.push({ x: shell.impact.x, y: shell.impact.y, color: w.style.burst, radius: w.blastRadius, born: frame });
@@ -545,7 +590,7 @@ export default function TankCanvas({ state, mySeat, aim, animation, muted, onAni
 
 interface Overlay {
   heads: Head[];
-  trails: { pts: Point[]; color: string }[];
+  trails: { pts: Point[]; color: string; style: TrailStyle }[];
   bursts: { x: number; y: number; color: string; radius: number; age?: number }[];
   /** 0 = at rest, 1 = full recoil (applied to the seat on turn). */
   recoil: number;
@@ -565,6 +610,44 @@ interface Overlay {
   fireSeed?: number;
   /** Full-screen white flash for huge blasts (0 = none). */
   flash?: number;
+}
+
+/** Draw a shell's trail as a tapered comet that fades toward the tail. Energy,
+ *  ice and fiery weapons ("glow") burn additively with a white-hot core, the
+ *  way Pocket Tanks streaks read. "smoke"/"spark"/"ember" keep the line subtle
+ *  because their wake is carried by particles. */
+function drawTrail(ctx: CanvasRenderingContext2D, pts: Point[], color: string, style: TrailStyle): void {
+  const n = pts.length;
+  if (n < 2) return;
+  const glow = style === "glow";
+  const subtle = style === "smoke" || style === "spark" || style === "ember";
+  const TAIL = Math.min(n - 1, glow ? 46 : 36); // comet length in samples
+  const start = n - 1 - TAIL;
+
+  if (glow) ctx.globalCompositeOperation = "lighter";
+  ctx.lineCap = "round";
+  for (let i = start; i < n - 1; i++) {
+    const f = (i - start) / TAIL; // 0 at the tail … 1 at the head
+    ctx.globalAlpha = (glow ? 0.55 : subtle ? 0.3 : 0.5) * f * f;
+    ctx.lineWidth = (glow ? 4 : 2.4) * (0.25 + f);
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(pts[i].x, pts[i].y);
+    ctx.lineTo(pts[i + 1].x, pts[i + 1].y);
+    ctx.stroke();
+  }
+  if (glow) {
+    // Bright white-hot core over the leading stretch.
+    const coreStart = Math.max(start, n - 16);
+    ctx.globalAlpha = 0.9;
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = "#ffffff";
+    ctx.beginPath();
+    for (let i = coreStart; i < n; i++) (i === coreStart ? ctx.moveTo(pts[i].x, pts[i].y) : ctx.lineTo(pts[i].x, pts[i].y));
+    ctx.stroke();
+    ctx.globalCompositeOperation = "source-over";
+  }
+  ctx.globalAlpha = 1;
 }
 
 /** Draw a shell in flight with a recognisable, heading-oriented silhouette so a
@@ -601,6 +684,28 @@ function drawShell(ctx: CanvasRenderingContext2D, h: Head): void {
       ctx.beginPath();
       ctx.arc(len * 0.45, 0, w, 0, Math.PI * 2);
       ctx.fill();
+      break;
+    }
+    case "shell": {
+      // Classic artillery shell: ogive nose + cylindrical body (the Shell).
+      const len = r * 2.6;
+      const w = r * 0.95;
+      const body = ctx.createLinearGradient(0, -w, 0, w);
+      body.addColorStop(0, "#fff7d8");
+      body.addColorStop(0.5, color);
+      body.addColorStop(1, "#9a7322");
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.moveTo(len, 0); // pointed nose
+      ctx.quadraticCurveTo(len * 0.5, -w, len * 0.1, -w);
+      ctx.lineTo(-len * 0.7, -w); // body
+      ctx.lineTo(-len * 0.7, w);
+      ctx.lineTo(len * 0.1, w);
+      ctx.quadraticCurveTo(len * 0.5, w, len, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "rgba(40,30,10,0.5)"; // driving band
+      ctx.fillRect(-len * 0.55, -w, r * 0.5, w * 2);
       break;
     }
     case "heavy": {
@@ -773,17 +878,9 @@ function drawScene(
     if (onTurn && tank.alive) drawWindTag(ctx, drawX, Math.max(16, ty - 66), state.wind);
   }
 
-  // Shell trails + heads.
-  for (const t of overlay.trails) {
-    if (t.pts.length < 2) continue;
-    ctx.strokeStyle = t.color;
-    ctx.globalAlpha = 0.5;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    t.pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-  }
+  // Shell trails — a tapered comet that fades toward the tail; energy/ice
+  // weapons glow additively with a bright core.
+  for (const t of overlay.trails) drawTrail(ctx, t.pts, t.color, t.style);
   for (const h of overlay.heads) drawShell(ctx, h);
 
   // Explosions — Pocket Tanks-style: a bright saturated bloom that pops out fast

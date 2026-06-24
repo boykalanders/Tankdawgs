@@ -12,28 +12,45 @@ import type { Weapon } from "./types.js";
  *     across the field (Jackhammer 3.6)
  *   • damage / crater — `maxDamage` (tuned to role) / `digFactor`
  *   • behaviour — `kind`: single · fan · salvo · cluster · mirv · roller · napalm
- *   • scarcity — `ammo`: every weapon is limited per game EXCEPT the Shell, which
- *     is the unlimited fallback. Stronger / wider weapons get fewer rounds.
+ *   • scarcity — `ammo`: the **Bullet** is the only unlimited weapon (the default
+ *     fallback). The Shell is a limited artillery shell (3). Other specials are
+ *     RARE — most carry a single round; a couple of forgiving ones (Sniper,
+ *     Tri-Shot, Cluster) get 2.
  *
  * `shellShape` gives the named heavy hitters a recognisable in-flight silhouette
  * so you can read an incoming round on sight. Add entries freely — the engine,
  * picker and renderer all read this registry.
  */
 export const WEAPONS: Record<string, Weapon> = {
+  bullet: {
+    id: "bullet",
+    name: "Bullet",
+    blurb: "Unlimited basic round. Small blast — your fallback when specials run dry.",
+    kind: "single",
+    blastRadius: 15,
+    maxDamage: 18,
+    digFactor: 0.5,
+    count: 1,
+    spreadDeg: 0,
+    velocityScale: 1.2,
+    knockback: 0.5,
+    // No `ammo` → unlimited. This is the default weapon.
+    style: { shell: "#ffe9a8", trail: "#ffe08a", burst: "#ffe9a8", shellRadius: 3, shellShape: "round", fx: "spark", smoke: "#6b6256" },
+  },
   shell: {
     id: "shell",
     name: "Shell",
-    blurb: "Unlimited, fast, flat all-rounder. Tight blast, light kick.",
+    blurb: "A proper artillery shell. Solid blast and crater — limited rounds.",
     kind: "single",
-    blastRadius: 30,
-    maxDamage: 30,
-    digFactor: 0.9,
+    blastRadius: 32,
+    maxDamage: 34,
+    digFactor: 1,
     count: 1,
     spreadDeg: 0,
-    velocityScale: 1.15,
-    knockback: 0.8,
-    // No `ammo` → unlimited.
-    style: { shell: "#ffe9a8", trail: "#ffd36a", burst: "#ffcf6b", shellRadius: 4, shellShape: "round", fx: "blast", smoke: "#6b6256" },
+    velocityScale: 1.1,
+    knockback: 1,
+    ammo: 3,
+    style: { shell: "#ffd36a", trail: "#ffbe4a", burst: "#ffcf6b", shellRadius: 4.5, shellShape: "shell", fx: "blast", smoke: "#6b6256" },
   },
   bigshot: {
     id: "bigshot",
@@ -47,8 +64,8 @@ export const WEAPONS: Record<string, Weapon> = {
     spreadDeg: 0,
     velocityScale: 0.82,
     knockback: 2.2,
-    ammo: 4,
-    style: { shell: "#ffb347", trail: "#ff8c42", burst: "#ff7a33", shellRadius: 7.5, shellShape: "heavy", fx: "blast", smoke: "#4a3a2a" },
+    ammo: 1,
+    style: { shell: "#ffb347", trail: "#ff8c42", trailStyle: "smoke", burst: "#ff7a33", shellRadius: 7.5, shellShape: "heavy", fx: "blast", smoke: "#4a3a2a" },
   },
   sniper: {
     id: "sniper",
@@ -62,8 +79,8 @@ export const WEAPONS: Record<string, Weapon> = {
     spreadDeg: 0,
     velocityScale: 1.35,
     knockback: 0.35,
-    ammo: 5,
-    style: { shell: "#bdf0ff", trail: "#7fd8ff", burst: "#dff6ff", shellRadius: 3, shellShape: "dart", fx: "spark", smoke: "#9fb6c4" },
+    ammo: 2,
+    style: { shell: "#bdf0ff", trail: "#7fd8ff", trailStyle: "glow", burst: "#dff6ff", shellRadius: 3, shellShape: "dart", fx: "spark", smoke: "#9fb6c4" },
   },
   railgun: {
     id: "railgun",
@@ -78,8 +95,8 @@ export const WEAPONS: Record<string, Weapon> = {
     powerSpread: 8,
     velocityScale: 1.55,
     knockback: 0.3,
-    ammo: 3,
-    style: { shell: "#aef6ff", trail: "#39d6ff", burst: "#d8ffff", shellRadius: 2.6, shellShape: "dart", fx: "plasma", smoke: "#7fd8ff" },
+    ammo: 1,
+    style: { shell: "#aef6ff", trail: "#39d6ff", trailStyle: "glow", burst: "#d8ffff", shellRadius: 2.6, shellShape: "dart", fx: "plasma", smoke: "#7fd8ff" },
   },
   tri: {
     id: "tri",
@@ -93,8 +110,8 @@ export const WEAPONS: Record<string, Weapon> = {
     spreadDeg: 9,
     velocityScale: 1.1,
     knockback: 0.6,
-    ammo: 4,
-    style: { shell: "#ffe9a8", trail: "#ffd36a", burst: "#ffcf6b", shellRadius: 3.5, shellShape: "round", fx: "spark", smoke: "#6b6256" },
+    ammo: 2,
+    style: { shell: "#ffe9a8", trail: "#ffd36a", trailStyle: "spark", burst: "#ffcf6b", shellRadius: 3.5, shellShape: "round", fx: "spark", smoke: "#6b6256" },
   },
   carpet: {
     id: "carpet",
@@ -108,7 +125,7 @@ export const WEAPONS: Record<string, Weapon> = {
     spreadDeg: 26,
     velocityScale: 1,
     knockback: 0.5,
-    ammo: 3,
+    ammo: 1,
     style: { shell: "#e9d18a", trail: "#c8a85a", burst: "#ffcf6b", shellRadius: 4, shellShape: "round", fx: "dirt", smoke: "#5a4a36" },
   },
   cluster: {
@@ -122,8 +139,8 @@ export const WEAPONS: Record<string, Weapon> = {
     count: 5,
     spreadDeg: 0,
     knockback: 0.5,
-    ammo: 3,
-    style: { shell: "#d6ff8a", trail: "#a7e34a", burst: "#c6ff5e", shellRadius: 5, shellShape: "round", fx: "blast", smoke: "#5e6b3a" },
+    ammo: 2,
+    style: { shell: "#d6ff8a", trail: "#a7e34a", trailStyle: "spark", burst: "#c6ff5e", shellRadius: 5, shellShape: "round", fx: "blast", smoke: "#5e6b3a" },
   },
   mirv: {
     id: "mirv",
@@ -136,8 +153,8 @@ export const WEAPONS: Record<string, Weapon> = {
     count: 4,
     spreadDeg: 0,
     knockback: 0.6,
-    ammo: 2,
-    style: { shell: "#ff9de2", trail: "#ff5fc4", burst: "#ff6fd0", shellRadius: 5, shellShape: "round", fx: "spark", smoke: "#a35a8e" },
+    ammo: 1,
+    style: { shell: "#ff9de2", trail: "#ff5fc4", trailStyle: "spark", burst: "#ff6fd0", shellRadius: 5, shellShape: "round", fx: "spark", smoke: "#a35a8e" },
   },
   hydra: {
     id: "hydra",
@@ -150,8 +167,8 @@ export const WEAPONS: Record<string, Weapon> = {
     count: 6,
     spreadDeg: 0,
     knockback: 0.5,
-    ammo: 2,
-    style: { shell: "#c9a8ff", trail: "#9a6cff", burst: "#b98cff", shellRadius: 4.5, shellShape: "round", fx: "spark", smoke: "#6a4aa3" },
+    ammo: 1,
+    style: { shell: "#c9a8ff", trail: "#9a6cff", trailStyle: "spark", burst: "#b98cff", shellRadius: 4.5, shellShape: "round", fx: "spark", smoke: "#6a4aa3" },
   },
   roller: {
     id: "roller",
@@ -165,22 +182,22 @@ export const WEAPONS: Record<string, Weapon> = {
     spreadDeg: 0,
     velocityScale: 0.95,
     knockback: 1,
-    ammo: 3,
+    ammo: 1,
     style: { shell: "#cdd2da", trail: "#9aa3af", burst: "#ffcf6b", shellRadius: 5.5, shellShape: "round", fx: "dirt", smoke: "#54504a" },
   },
   jackhammer: {
     id: "jackhammer",
     name: "Jackhammer",
-    blurb: "Light damage, colossal knockback — punts a tank clear across a hill.",
-    kind: "single",
-    blastRadius: 30,
-    maxDamage: 16,
-    digFactor: 0.6,
-    count: 1,
+    blurb: "Pounds the impact four times — light hits, but it punts a tank clear across a hill.",
+    kind: "hammer",
+    blastRadius: 26,
+    maxDamage: 7,
+    digFactor: 0.5,
+    count: 4, // number of hammer blows
     spreadDeg: 0,
     velocityScale: 1,
-    knockback: 3.6,
-    ammo: 3,
+    knockback: 7,
+    ammo: 1,
     style: { shell: "#ffd27f", trail: "#ff9f4a", burst: "#ffe1a0", shellRadius: 5.5, shellShape: "piston", fx: "blast", smoke: "#4a4036" },
   },
   napalm: {
@@ -194,8 +211,8 @@ export const WEAPONS: Record<string, Weapon> = {
     count: 6,
     spreadDeg: 0,
     knockback: 0.3,
-    ammo: 3,
-    style: { shell: "#ff7b3a", trail: "#ff5a1f", burst: "#ff8c1a", shellRadius: 4.5, shellShape: "round", fx: "fire", smoke: "#2a2420", lingerFire: true },
+    ammo: 1,
+    style: { shell: "#ff7b3a", trail: "#ff5a1f", trailStyle: "ember", burst: "#ff8c1a", shellRadius: 4.5, shellShape: "round", fx: "fire", smoke: "#2a2420", lingerFire: true },
   },
   inferno: {
     id: "inferno",
@@ -209,8 +226,8 @@ export const WEAPONS: Record<string, Weapon> = {
     spreadDeg: 0,
     velocityScale: 0.9,
     knockback: 1.4,
-    ammo: 2,
-    style: { shell: "#ff5a2a", trail: "#ff3a10", burst: "#ff6a12", shellRadius: 6, shellShape: "round", fx: "fire", smoke: "#241c18" },
+    ammo: 1,
+    style: { shell: "#ff5a2a", trail: "#ff3a10", trailStyle: "ember", burst: "#ff6a12", shellRadius: 6, shellShape: "round", fx: "fire", smoke: "#241c18" },
   },
   cryo: {
     id: "cryo",
@@ -224,8 +241,8 @@ export const WEAPONS: Record<string, Weapon> = {
     spreadDeg: 0,
     velocityScale: 1,
     knockback: 0.7,
-    ammo: 3,
-    style: { shell: "#dff4ff", trail: "#a9e2ff", burst: "#eafaff", shellRadius: 5, shellShape: "round", fx: "frost", smoke: "#bfe6f5" },
+    ammo: 1,
+    style: { shell: "#dff4ff", trail: "#a9e2ff", trailStyle: "glow", burst: "#eafaff", shellRadius: 5, shellShape: "round", fx: "frost", smoke: "#bfe6f5" },
   },
   digger: {
     id: "digger",
@@ -239,7 +256,7 @@ export const WEAPONS: Record<string, Weapon> = {
     spreadDeg: 0,
     velocityScale: 0.95,
     knockback: 0.4,
-    ammo: 3,
+    ammo: 1,
     style: { shell: "#c9a76a", trail: "#a8854a", burst: "#b98a4a", shellRadius: 6, shellShape: "drill", fx: "dirt", smoke: "#4a3c2a" },
   },
   nuke: {
@@ -255,13 +272,13 @@ export const WEAPONS: Record<string, Weapon> = {
     velocityScale: 0.85,
     knockback: 2.6,
     ammo: 1,
-    style: { shell: "#fff0a0", trail: "#ffd24a", burst: "#fff3c0", shellRadius: 7, shellShape: "warhead", fx: "blast", smoke: "#3a342c" },
+    style: { shell: "#fff0a0", trail: "#ffd24a", trailStyle: "smoke", burst: "#fff3c0", shellRadius: 7, shellShape: "warhead", fx: "blast", smoke: "#3a342c" },
   },
 };
 
 export const WEAPON_LIST: Weapon[] = Object.values(WEAPONS);
 
-export const DEFAULT_WEAPON = "shell";
+export const DEFAULT_WEAPON = "bullet";
 
 export function weaponById(id: string): Weapon {
   return WEAPONS[id] ?? WEAPONS[DEFAULT_WEAPON];
